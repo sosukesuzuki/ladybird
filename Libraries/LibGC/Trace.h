@@ -24,13 +24,13 @@ struct TraceEvent {
     uint64_t size;
 };
 
-using TraceEventSharedQueue = Core::SharedSingleProducerCircularQueue<TraceEvent>;
+using TraceEventSharedQueue = Core::SharedSingleProducerCircularQueue<TraceEvent, 1024>;
 
 class Trace {
 public:
     static Trace& instance()
     {
-        static Trace instance;
+        static Trace instance(MUST(Threading::WorkerThread<int>::create(StringView("TraceWorker", 11))));
         return instance;
     }
 
@@ -39,18 +39,20 @@ public:
         instance().enqueue_event(event);
     }
 private:
-    Trace()
+    Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker): m_worker(move(worker))
     {
+        dbgln("Constructor");
         m_queue = MUST(TraceEventSharedQueue::create());
-        auto worker = MUST(Threading::WorkerThread<int>::create(StringView("TraceWorker", 11)));
-        worker->start_task([&]() -> ErrorOr<void, int> {
+        auto started = m_worker->start_task([&]() -> ErrorOr<void, int> {
             Vector<TraceEvent, 1024> buffer;
             buffer.ensure_capacity(1024);
             while (true) {
                 auto result = m_queue.dequeue();
-                auto queueStatus = result.error();
-                if (queueStatus == TraceEventSharedQueue::QueueStatus::Empty)
-                    continue;
+                if (result.is_error()) {
+                    auto queueStatus = result.error();
+                    if (queueStatus == TraceEventSharedQueue::QueueStatus::Empty)
+                        continue;
+                }
                 auto event = result.value();
                 buffer.append(event);
                 if (buffer.size() >= buffer.capacity()) {
@@ -61,16 +63,24 @@ private:
             }
             return { };
         });
+        dbgln("started: {}", started);
     };
 
     void enqueue_event(TraceEvent event)
     {
-        auto result = m_queue.enqueue(event); 
-        if (result.error() == TraceEventSharedQueue::QueueStatus::Full)
-            dbgln("full queue");
+        while (true) {
+            auto result = m_queue.enqueue(event);
+            if (result.is_error() && result.error() == TraceEventSharedQueue::QueueStatus::Full) {
+                // dbgln("waiting");
+            } else {
+                // dbgln("address: 0x{:x}, size: {}", event.absolute_address, event.size);
+                break;
+            }
+        }
     }
 
     TraceEventSharedQueue m_queue;
+    NonnullOwnPtr<Threading::WorkerThread<int>> m_worker;
 };
 
 }
