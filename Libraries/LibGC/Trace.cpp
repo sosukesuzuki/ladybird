@@ -5,12 +5,5 @@
  */
 
 #include <LibGC/Trace.h>
-#include <AK/Format.h>
 
-namespace JS {
-
-void Trace::log() {
-    dbgln("log from Trace");
-}
-
-}
+namespace JS {}
