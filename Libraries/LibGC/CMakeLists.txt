@@ -7,6 +7,7 @@ set(SOURCES
     Root.cpp
     Heap.cpp
     HeapBlock.cpp
+    Trace.cpp
     MarkedVector.cpp
     WeakContainer.cpp
 )

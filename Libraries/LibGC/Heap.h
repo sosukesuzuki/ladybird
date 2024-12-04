@@ -26,6 +26,7 @@
 #include <LibGC/MarkedVector.h>
 #include <LibGC/Root.h>
 #include <LibGC/WeakContainer.h>
+#include <LibGC/Trace.h>
 
 namespace GC {
 
