@@ -8,6 +8,8 @@
 
 #include <AK/Types.h>
 #include <AK/Vector.h>
+#include <AK/ByteBuffer.h>
+#include <LibCore/File.h>
 #include <LibCore/SharedCircularQueue.h>
 #include <LibThreading/WorkerThread.h>
 
@@ -30,7 +32,10 @@ class Trace {
 public:
     static Trace& instance()
     {
-        static Trace instance(MUST(Threading::WorkerThread<int>::create(StringView("TraceWorker", 11))));
+        static Trace instance(
+            MUST(Threading::WorkerThread<int>::create(StringView("TraceWorker", 11))),
+            MUST(Core::File::open(StringView("gc_events.bin", 13), Core::File::OpenMode::Write))
+        );
         return instance;
     }
 
@@ -39,7 +44,7 @@ public:
         instance().enqueue_event(event);
     }
 private:
-    Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker): m_worker(move(worker))
+    Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker, NonnullOwnPtr<Core::File> file): m_worker(move(worker)), m_file(move(file))
     {
         m_queue = MUST(TraceEventSharedQueue::create());
         m_worker->start_task([&]() -> ErrorOr<void, int> {
@@ -55,8 +60,7 @@ private:
                 auto event = result.value();
                 buffer.append(event);
                 if (buffer.size() >= buffer.capacity()) {
-                    // TODO: write to file
-                    dbgln("WRITE!!");
+                    MUST(this->write(buffer));
                     buffer.clear_with_capacity();
                 }
             }
@@ -77,8 +81,15 @@ private:
         }
     }
 
+    ErrorOr<void> write(const Vector<TraceEvent, 1024>& buffer) {
+        auto copiedBuffer = TRY(ByteBuffer::copy(buffer.data(), buffer.size() * sizeof(TraceEvent)));
+        TRY(m_file->write_some(copiedBuffer));
+        return { };
+    }
+
     TraceEventSharedQueue m_queue;
     NonnullOwnPtr<Threading::WorkerThread<int>> m_worker;
+    NonnullOwnPtr<Core::File> m_file;
 };
 
 }
