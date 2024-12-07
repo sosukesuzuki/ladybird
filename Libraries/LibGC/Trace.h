@@ -41,9 +41,8 @@ public:
 private:
     Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker): m_worker(move(worker))
     {
-        dbgln("Constructor");
         m_queue = MUST(TraceEventSharedQueue::create());
-        auto started = m_worker->start_task([&]() -> ErrorOr<void, int> {
+        m_worker->start_task([&]() -> ErrorOr<void, int> {
             Vector<TraceEvent, 1024> buffer;
             buffer.ensure_capacity(1024);
             while (true) {
@@ -63,7 +62,6 @@ private:
             }
             return { };
         });
-        dbgln("started: {}", started);
     };
 
     void enqueue_event(TraceEvent event)
