@@ -34,7 +34,7 @@ public:
     {
         static Trace instance(
             MUST(Threading::WorkerThread<int>::create(StringView("TraceWorker", 11))),
-            MUST(Core::File::open(StringView("gc_events.bin", 13), Core::File::OpenMode::Write))
+            MUST(Core::File::open(StringView("gc_events.bin", 13), Core::File::OpenMode::Write | Core::File::OpenMode::Append))
         );
         return instance;
     }
@@ -58,6 +58,7 @@ private:
                         continue;
                 }
                 auto event = result.value();
+                // dbgln("from worker: type: {}, address: 0x{:x}, size: {}", static_cast<uint8_t>(event.type), event.absolute_address, event.size);
                 buffer.append(event);
                 if (buffer.size() >= buffer.capacity()) {
                     MUST(this->write(buffer));
@@ -75,15 +76,14 @@ private:
             if (result.is_error() && result.error() == TraceEventSharedQueue::QueueStatus::Full) {
                 // dbgln("waiting");
             } else {
-                // dbgln("address: 0x{:x}, size: {}", event.absolute_address, event.size);
+                // dbgln("type: {}, address: 0x{:x}, size: {}", static_cast<uint8_t>(event.type), event.absolute_address, event.size);
                 break;
             }
         }
     }
 
     ErrorOr<void> write(const Vector<TraceEvent, 1024>& buffer) {
-        auto copiedBuffer = TRY(ByteBuffer::copy(buffer.data(), buffer.size() * sizeof(TraceEvent)));
-        TRY(m_file->write_some(copiedBuffer));
+        TRY(m_file->write_some(ReadonlyBytes { buffer.data(), buffer.size() * sizeof(TraceEvent) }));
         return { };
     }
 
