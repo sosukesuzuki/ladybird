@@ -16,6 +16,7 @@
 #include <LibGC/Forward.h>
 #include <LibGC/Internals.h>
 #include <LibGC/Ptr.h>
+#include <LibGC/Trace.h>
 
 namespace GC {
 
@@ -44,7 +45,10 @@ public:
     virtual ~Cell() = default;
 
     bool is_marked() const { return m_mark; }
-    void set_marked(bool b) { m_mark = b; }
+    void set_marked(bool b) {
+        Trace::log({ TraceEventType::GCMark, reinterpret_cast<uintptr_t>(this), 0 });
+        m_mark = b;
+    }
 
     enum class State : bool {
         Live,
