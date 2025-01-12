@@ -926,7 +926,7 @@ set(GENERATED_SOURCES
 
 serenity_lib(LibWeb web)
 
-target_link_libraries(LibWeb PRIVATE LibCore LibCompress LibCrypto LibJS LibHTTP LibGfx LibIPC LibRegex LibSyntax LibTextCodec LibUnicode LibMedia LibWasm LibXML LibIDL LibURL LibTLS LibRequests LibGC skia)
+target_link_libraries(LibWeb PRIVATE LibCore LibCompress LibCrypto LibJS LibHTTP LibGfx LibIPC LibRegex LibSyntax LibTextCodec LibUnicode LibMedia LibWasm LibXML LibIDL LibURL LibTLS LibRequests LibGC LibThreading skia)
 
 if (APPLE)
     target_link_libraries(LibWeb PRIVATE unofficial::angle::libEGL unofficial::angle::libGLESv2)
