@@ -23,7 +23,7 @@ enum class TraceEventType: uint8_t {
 struct TraceEvent {
     TraceEventType type;
     uint64_t absolute_address;
-    uint64_t size;
+    uint32_t size;
 };
 
 using TraceEventSharedQueue = Core::SharedSingleProducerCircularQueue<TraceEvent, 1024>;
