@@ -7,7 +7,7 @@
 
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/PropertyDescriptor.h>
 #include <LibJS/Runtime/PropertyKey.h>
@@ -38,12 +38,35 @@ void Location::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_default_properties);
 }
 
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
 void Location::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
     WEB_SET_PROTOTYPE_FOR_INTERFACE(Location);
 
-    // FIXME: Implement steps 2.-4.
+    auto& vm = this->vm();
+
+    // Step 2: Let valueOf be location's relevant realm.[[Intrinsics]].[[%Object.prototype.valueOf%]].
+    auto& intrinsics = realm.intrinsics();
+    auto value_of_function = intrinsics.object_prototype()->get_without_side_effects(vm.names.valueOf);
+
+    // Step 3: Perform ! location.[[DefineOwnProperty]]("valueOf", { [[Value]]: valueOf, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }).
+    auto value_of_property_descriptor = JS::PropertyDescriptor {
+        .value = value_of_function,
+        .writable = false,
+        .enumerable = false,
+        .configurable = false,
+    };
+    MUST(internal_define_own_property(vm.names.valueOf, value_of_property_descriptor));
+
+    // Step 4: Perform ! location.[[DefineOwnProperty]](%Symbol.toPrimitive%, { [[Value]]: undefined, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }).
+    auto to_primitive_property_descriptor = JS::PropertyDescriptor {
+        .value = JS::js_undefined(),
+        .writable = false,
+        .enumerable = false,
+        .configurable = false,
+    };
+    MUST(internal_define_own_property(vm.well_known_symbol_to_primitive(), to_primitive_property_descriptor));
 
     // 5. Set the value of the [[DefaultProperties]] internal slot of location to location.[[OwnPropertyKeys]]().
     // NOTE: In LibWeb this happens before the ESO is set up, so we must avoid location's custom [[OwnPropertyKeys]].
@@ -108,22 +131,21 @@ WebIDL::ExceptionOr<String> Location::href() const
 WebIDL::ExceptionOr<void> Location::set_href(String const& new_href)
 {
     auto& realm = this->realm();
-    auto& window = verify_cast<HTML::Window>(HTML::current_principal_global_object());
 
     // 1. If this's relevant Document is null, then return.
     auto const relevant_document = this->relevant_document();
     if (!relevant_document)
         return {};
 
-    // FIXME: 2. Let url be the result of encoding-parsing a URL given the given value, relative to the entry settings object.
-    auto href_url = window.associated_document().parse_url(new_href.to_byte_string());
+    // 2. Let url be the result of encoding-parsing a URL given the given value, relative to the entry settings object.
+    auto url = entry_settings_object().encoding_parse_url(new_href.to_byte_string());
 
     // 3. If url is failure, then throw a "SyntaxError" DOMException.
-    if (!href_url.is_valid())
+    if (!url.is_valid())
         return WebIDL::SyntaxError::create(realm, MUST(String::formatted("Invalid URL '{}'", new_href)));
 
     // 4. Location-object navigate this to url.
-    TRY(navigate(href_url));
+    TRY(navigate(url));
 
     return {};
 }
@@ -174,7 +196,7 @@ WebIDL::ExceptionOr<void> Location::set_protocol(String const& value)
     auto possible_failure = URL::Parser::basic_parse(value, {}, &copy_url, URL::Parser::State::SchemeStart);
 
     // 5. If possibleFailure is failure, then throw a "SyntaxError" DOMException.
-    if (!possible_failure.is_valid())
+    if (!possible_failure.has_value())
         return WebIDL::SyntaxError::create(realm(), MUST(String::formatted("Failed to set protocol. '{}' is an invalid protocol", value)));
 
     // 6. if copyURL's scheme is not an HTTP(S) scheme, then terminate these steps.
@@ -391,7 +413,10 @@ WebIDL::ExceptionOr<void> Location::set_hash(String const& value)
     (void)URL::Parser::basic_parse(input, {}, &copy_url, URL::Parser::State::Fragment);
 
     // 7. If copyURL's fragment is this's url's fragment, then return.
-    if (copy_url.fragment() == this->url().fragment())
+    // NOTE: Ignore null values when comparing fragments. This behavior is not explicitly mentioned in the specs, potential bug?
+    auto copy_url_fragment = copy_url.fragment().has_value() ? copy_url.fragment() : String {};
+    auto this_url_fragment = this->url().fragment().has_value() ? this->url().fragment() : String {};
+    if (copy_url_fragment == this_url_fragment)
         return {};
 
     // 8. Location-object navigate this to copyURL.
@@ -500,6 +525,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> Location::internal_get_o
         auto descriptor = MUST(Object::internal_get_own_property(property_key));
 
         // 2. If the value of the [[DefaultProperties]] internal slot of this contains P, then set desc.[[Configurable]] to true.
+        // FIXME: This doesn't align with what the other browsers do. Spec issue: https://github.com/whatwg/html/issues/4157
         auto property_key_value = property_key.is_symbol()
             ? JS::Value { property_key.as_symbol() }
             : JS::PrimitiveString::create(vm, property_key.to_string());
@@ -573,7 +599,7 @@ JS::ThrowCompletionOr<bool> Location::internal_delete(JS::PropertyKey const& pro
 }
 
 // 7.10.5.10 [[OwnPropertyKeys]] ( ), https://html.spec.whatwg.org/multipage/history.html#location-ownpropertykeys
-JS::ThrowCompletionOr<GC::MarkedVector<JS::Value>> Location::internal_own_property_keys() const
+JS::ThrowCompletionOr<GC::RootVector<JS::Value>> Location::internal_own_property_keys() const
 {
     // 1. If IsPlatformObjectSameOrigin(this) is true, then return OrdinaryOwnPropertyKeys(this).
     if (HTML::is_platform_object_same_origin(*this))

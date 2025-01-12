@@ -7,7 +7,7 @@
 #include "CSSRGB.h"
 #include <AK/TypeCasts.h>
 #include <LibWeb/CSS/Serialize.h>
-#include <LibWeb/CSS/StyleValues/CSSMathValue.h>
+#include <LibWeb/CSS/StyleValues/CalculatedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 
@@ -29,8 +29,8 @@ Color CSSRGB::to_color(Optional<Layout::NodeWithStyle const&>) const
         if (style_value.is_percentage())
             return normalized(style_value.as_percentage().value() * 255 / 100);
 
-        if (style_value.is_math()) {
-            auto const& calculated = style_value.as_math();
+        if (style_value.is_calculated()) {
+            auto const& calculated = style_value.as_calculated();
             if (calculated.resolves_to_number())
                 return normalized(calculated.resolve_number().value());
             if (calculated.resolves_to_percentage())
@@ -70,10 +70,10 @@ bool CSSRGB::equals(CSSStyleValue const& other) const
 }
 
 // https://www.w3.org/TR/css-color-4/#serializing-sRGB-values
-String CSSRGB::to_string() const
+String CSSRGB::to_string(SerializationMode mode) const
 {
     // FIXME: Do this properly, taking unresolved calculated values into account.
-    if (m_properties.name.has_value())
+    if (mode != SerializationMode::ResolvedValue && m_properties.name.has_value())
         return m_properties.name.value().to_string().to_ascii_lowercase();
     return serialize_a_srgb_value(to_color({}));
 }

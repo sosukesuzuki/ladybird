@@ -24,6 +24,7 @@ test("basic functionality", () => {
     expect(Date.parse("2021-07-01 03:00Z")).toBe(1625108400000);
     expect(Date.parse("2024-01-08 9:00Z")).toBe(1704704400000);
     expect(Date.parse("Wed, 17 Jan 2024 11:36:34 +0000")).toBe(1705491394000);
+    expect(Date.parse("Thu, 09 Jan 2025 23:00:00")).toBe(1736485200000);
     expect(Date.parse("Sun Jan 21 2024 21:11:31 GMT 0100 (Central European Standard Time)")).toBe(
         1705867891000
     );
@@ -42,6 +43,7 @@ test("basic functionality", () => {
     expect(Date.parse("Tuesday, October 29, 2024, 18:00 UTC")).toBe(1730224800000);
     expect(Date.parse("November 19 2024 00:00:00 +0900")).toBe(1731942000000);
     expect(Date.parse("Wed Nov 20 2024")).toBe(1732082400000);
+    expect(Date.parse("2025-01-02 14:00:00+0000")).toBe(1735826400000);
 
     // FIXME: Create a scoped time zone helper when bytecode supports the `using` declaration.
     setTimeZone(originalTimeZone);

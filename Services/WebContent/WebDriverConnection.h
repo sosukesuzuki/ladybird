@@ -9,9 +9,8 @@
 #pragma once
 
 #include <AK/ByteString.h>
-#include <AK/HashMap.h>
 #include <AK/String.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibGfx/Rect.h>
 #include <LibIPC/ConnectionToServer.h>
 #include <LibIPC/Transport.h>
@@ -146,7 +145,7 @@ private:
 
     struct ScriptArguments {
         ByteString script;
-        GC::MarkedVector<JS::Value> arguments;
+        GC::RootVector<JS::Value> arguments;
     };
     ErrorOr<ScriptArguments, Web::WebDriver::Error> extract_the_script_arguments_from_a_request(JS::VM&, JsonValue const& payload);
     void handle_script_response(Web::WebDriver::ExecutionResult);

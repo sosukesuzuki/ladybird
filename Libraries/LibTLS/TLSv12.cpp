@@ -23,10 +23,6 @@
 #include <LibTLS/TLSv12.h>
 #include <errno.h>
 
-#ifndef SOCK_NONBLOCK
-#    include <sys/ioctl.h>
-#endif
-
 namespace TLS {
 
 void TLSv12::consume(ReadonlyBytes record)
@@ -356,7 +352,7 @@ bool Context::verify_certificate_pair(Certificate const& subject, Certificate co
         }
         auto verification_buffer = verification_buffer_result.release_value();
         auto verification_buffer_bytes = verification_buffer.bytes();
-        rsa.verify(subject.signature_value, verification_buffer_bytes);
+        MUST(rsa.verify(subject.signature_value, verification_buffer_bytes));
 
         ReadonlyBytes message = subject.tbs_asn1.bytes();
         auto pkcs1 = Crypto::PK::EMSA_PKCS1_V1_5<Crypto::Hash::Manager>(kind);
@@ -371,6 +367,16 @@ bool Context::verify_certificate_pair(Certificate const& subject, Certificate co
         return false;
     }
 
+    auto public_point = issuer.public_key.ec.to_secpxxxr1_point();
+
+    auto maybe_signature = Crypto::Curves::SECPxxxr1Signature::from_asn(subject.signature_value, {});
+    if (maybe_signature.is_error()) {
+        dbgln("verify_certificate_pair: Signature is not ASN.1 DER encoded");
+        return false;
+    }
+
+    auto signature = maybe_signature.release_value();
+
     switch (ec_curve.release_value()) {
     case SupportedGroup::SECP256R1: {
         Crypto::Hash::Manager hasher(kind);
@@ -378,7 +384,7 @@ bool Context::verify_certificate_pair(Certificate const& subject, Certificate co
         auto hash = hasher.digest();
 
         Crypto::Curves::SECP256r1 curve;
-        auto result = curve.verify(hash.bytes(), issuer.public_key.raw_key, subject.signature_value);
+        auto result = curve.verify_point(hash.bytes(), public_point, signature);
         if (result.is_error()) {
             dbgln("verify_certificate_pair: Failed to check SECP256r1 signature {}", result.release_error());
             return false;
@@ -391,7 +397,7 @@ bool Context::verify_certificate_pair(Certificate const& subject, Certificate co
         auto hash = hasher.digest();
 
         Crypto::Curves::SECP384r1 curve;
-        auto result = curve.verify(hash.bytes(), issuer.public_key.raw_key, subject.signature_value);
+        auto result = curve.verify_point(hash.bytes(), public_point, signature);
         if (result.is_error()) {
             dbgln("verify_certificate_pair: Failed to check SECP384r1 signature {}", result.release_error());
             return false;
@@ -431,15 +437,14 @@ static void hmac_pseudorandom_function(Bytes output, ReadonlyBytes secret, u8 co
     HMACType hmac(secret);
     append_label_seed(hmac);
 
-    constexpr auto digest_size = hmac.digest_size();
-    u8 digest[digest_size];
-    auto digest_0 = Bytes { digest, digest_size };
+    auto digest_size = hmac.digest_size();
+    auto digest_0 = MUST(ByteBuffer::create_uninitialized(digest_size));
 
     digest_0.overwrite(0, hmac.digest().immutable_data(), digest_size);
 
     size_t index = 0;
     while (index < output.size()) {
-        hmac.update(digest_0);
+        hmac.update(digest_0.bytes());
         append_label_seed(hmac);
         auto digest_1 = hmac.digest();
 
@@ -448,7 +453,7 @@ static void hmac_pseudorandom_function(Bytes output, ReadonlyBytes secret, u8 co
         output.overwrite(index, digest_1.immutable_data(), copy_size);
         index += copy_size;
 
-        digest_0.overwrite(0, hmac.process(digest_0).immutable_data(), digest_size);
+        digest_0.overwrite(0, hmac.process(digest_0.bytes()).immutable_data(), digest_size);
     }
 }
 

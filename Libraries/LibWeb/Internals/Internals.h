@@ -21,6 +21,7 @@ public:
     virtual ~Internals() override;
 
     void signal_text_test_is_done(String const& text);
+    void set_test_timeout(double milliseconds);
 
     void gc();
     JS::Object* hit_test(double x, double y);
@@ -32,6 +33,7 @@ public:
     void click(double x, double y);
     void doubleclick(double x, double y);
     void middle_click(double x, double y);
+    void mouse_down(double x, double y);
     void move_pointer_to(double x, double y);
     void wheel(double x, double y, double delta_x, double delta_y);
 
@@ -54,11 +56,14 @@ public:
     static u16 get_echo_server_port();
     static void set_echo_server_port(u16 port);
 
+    bool headless();
+
 private:
     explicit Internals(JS::Realm&);
     virtual void initialize(JS::Realm&) override;
 
     void click(double x, double y, UIEvents::MouseButton);
+    void mouse_down(double x, double y, UIEvents::MouseButton);
 
     HTML::Window& internals_window() const;
     Page& internals_page() const;

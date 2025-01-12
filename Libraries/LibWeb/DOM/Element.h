@@ -13,10 +13,11 @@
 #include <LibWeb/Bindings/ElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/ShadowRootPrototype.h>
+#include <LibWeb/CSS/CascadedProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/CountersSet.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleInvalidation.h>
-#include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleProperty.h>
 #include <LibWeb/DOM/ChildNode.h>
 #include <LibWeb/DOM/NonDocumentTypeChildNode.h>
@@ -71,7 +72,7 @@ struct CustomElementUpgradeReaction {
 // A callback reaction, which will call a lifecycle callback, and contains a callback function as well as a list of arguments.
 struct CustomElementCallbackReaction {
     GC::Root<WebIDL::CallbackType> callback;
-    GC::MarkedVector<JS::Value> arguments;
+    GC::RootVector<JS::Value> arguments;
 };
 
 // https://dom.spec.whatwg.org/#concept-element-custom-element-state
@@ -82,6 +83,17 @@ enum class CustomElementState {
     Uncustomized,
     Precustomized,
     Custom,
+};
+
+// https://drafts.csswg.org/css-contain/#proximity-to-the-viewport
+// An element that has content-visibility: auto is in one of three states when it comes to its proximity to the viewport:
+enum class ProximityToTheViewport {
+    // - The element is close to the viewport:
+    CloseToTheViewport,
+    // - The element is far away from the viewport:
+    FarAwayFromTheViewport,
+    // - The element’s proximity to the viewport is not determined:
+    NotDetermined,
 };
 
 class Element
@@ -172,11 +184,13 @@ public:
     // https://html.spec.whatwg.org/multipage/embedded-content-other.html#dimension-attributes
     virtual bool supports_dimension_attributes() const { return false; }
 
-    virtual void apply_presentational_hints(CSS::StyleProperties&) const { }
+    virtual bool is_presentational_hint(FlyString const&) const { return false; }
+    virtual void apply_presentational_hints(GC::Ref<CSS::CascadedProperties>) const { }
 
     void run_attribute_change_steps(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_);
 
     CSS::RequiredInvalidationAfterStyleChange recompute_style();
+    CSS::RequiredInvalidationAfterStyleChange recompute_inherited_style();
 
     Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element() const { return m_use_pseudo_element; }
     void set_use_pseudo_element(Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element) { m_use_pseudo_element = move(use_pseudo_element); }
@@ -184,16 +198,20 @@ public:
     GC::Ptr<Layout::NodeWithStyle> layout_node();
     GC::Ptr<Layout::NodeWithStyle const> layout_node() const;
 
-    Optional<CSS::StyleProperties>& computed_css_values() { return m_computed_css_values; }
-    Optional<CSS::StyleProperties> const& computed_css_values() const { return m_computed_css_values; }
-    void set_computed_css_values(Optional<CSS::StyleProperties>);
-    CSS::StyleProperties resolved_css_values(Optional<CSS::Selector::PseudoElement::Type> = {});
+    GC::Ptr<CSS::ComputedProperties> computed_properties() { return m_computed_properties; }
+    GC::Ptr<CSS::ComputedProperties const> computed_properties() const { return m_computed_properties; }
+    void set_computed_properties(GC::Ptr<CSS::ComputedProperties>);
+    GC::Ref<CSS::ComputedProperties> resolved_css_values(Optional<CSS::Selector::PseudoElement::Type> = {});
 
-    void set_pseudo_element_computed_css_values(CSS::Selector::PseudoElement::Type, Optional<CSS::StyleProperties>);
-    Optional<CSS::StyleProperties&> pseudo_element_computed_css_values(CSS::Selector::PseudoElement::Type);
+    [[nodiscard]] GC::Ptr<CSS::CascadedProperties> cascaded_properties(Optional<CSS::Selector::PseudoElement::Type>) const;
+    void set_cascaded_properties(Optional<CSS::Selector::PseudoElement::Type>, GC::Ptr<CSS::CascadedProperties>);
+
+    void set_pseudo_element_computed_properties(CSS::Selector::PseudoElement::Type, GC::Ptr<CSS::ComputedProperties>);
+    GC::Ptr<CSS::ComputedProperties> pseudo_element_computed_properties(CSS::Selector::PseudoElement::Type);
 
     void reset_animated_css_properties();
 
+    GC::Ptr<CSS::ElementInlineCSSStyleDeclaration> inline_style() { return m_inline_style; }
     GC::Ptr<CSS::ElementInlineCSSStyleDeclaration const> inline_style() const { return m_inline_style; }
 
     CSS::CSSStyleDeclaration* style_for_bindings();
@@ -236,13 +254,15 @@ public:
     GC::Ref<Geometry::DOMRect> get_bounding_client_rect() const;
     GC::Ref<Geometry::DOMRectList> get_client_rects() const;
 
-    virtual GC::Ptr<Layout::Node> create_layout_node(CSS::StyleProperties);
-    virtual void adjust_computed_style(CSS::StyleProperties&) { }
+    virtual GC::Ptr<Layout::Node> create_layout_node(GC::Ref<CSS::ComputedProperties>);
+    virtual void adjust_computed_style(CSS::ComputedProperties&) { }
 
     virtual void did_receive_focus() { }
     virtual void did_lose_focus() { }
 
-    static GC::Ptr<Layout::NodeWithStyle> create_layout_node_for_display_type(DOM::Document&, CSS::Display const&, CSS::StyleProperties, Element*);
+    static GC::Ptr<Layout::NodeWithStyle> create_layout_node_for_display_type(DOM::Document&, CSS::Display const&, GC::Ref<CSS::ComputedProperties>, Element*);
+
+    bool affected_by_hover() const;
 
     void set_pseudo_element_node(Badge<Layout::TreeBuilder>, CSS::Selector::PseudoElement::Type, GC::Ptr<Layout::NodeWithStyle>);
     GC::Ptr<Layout::NodeWithStyle> get_pseudo_element_node(CSS::Selector::PseudoElement::Type) const;
@@ -289,9 +309,14 @@ public:
     ENUMERATE_ARIA_ATTRIBUTES
 #undef __ENUMERATE_ARIA_ATTRIBUTE
 
+    GC::Ptr<DOM::Element> aria_active_descendant_element() { return m_aria_active_descendant_element; }
+    void set_aria_active_descendant_element(GC::Ptr<DOM::Element> value) { m_aria_active_descendant_element = value; }
+
     virtual bool exclude_from_accessibility_tree() const override;
 
     virtual bool include_in_accessibility_tree() const override;
+
+    virtual Element const* to_element() const override { return this; }
 
     bool is_hidden() const;
     bool has_hidden_ancestor() const;
@@ -300,7 +325,7 @@ public:
     bool has_referenced_and_hidden_ancestor() const;
 
     void enqueue_a_custom_element_upgrade_reaction(HTML::CustomElementDefinition& custom_element_definition);
-    void enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::MarkedVector<JS::Value> arguments);
+    void enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::RootVector<JS::Value> arguments);
 
     using CustomElementReactionQueue = Vector<Variant<CustomElementUpgradeReaction, CustomElementCallbackReaction>>;
     CustomElementReactionQueue* custom_element_reaction_queue() { return m_custom_element_reaction_queue; }
@@ -365,8 +390,12 @@ public:
     bool has_non_empty_counters_set() const { return m_counters_set; }
     Optional<CSS::CountersSet const&> counters_set();
     CSS::CountersSet& ensure_counters_set();
-    void resolve_counters(CSS::StyleProperties&);
+    void resolve_counters(CSS::ComputedProperties&);
     void inherit_counters();
+
+    ProximityToTheViewport proximity_to_the_viewport() const { return m_proximity_to_the_viewport; }
+    void determine_proximity_to_the_viewport();
+    bool is_relevant_to_the_user();
 
 protected:
     Element(Document&, DOM::QualifiedName);
@@ -380,7 +409,7 @@ protected:
     // https://dom.spec.whatwg.org/#concept-element-attributes-change-ext
     virtual void attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_);
 
-    virtual void computed_css_values_changed() { }
+    virtual void computed_properties_changed() { }
 
     virtual void visit_edges(Cell::Visitor&) override;
 
@@ -410,12 +439,14 @@ private:
     GC::Ptr<DOMTokenList> m_class_list;
     GC::Ptr<ShadowRoot> m_shadow_root;
 
-    Optional<CSS::StyleProperties> m_computed_css_values;
+    GC::Ptr<CSS::CascadedProperties> m_cascaded_properties;
+    GC::Ptr<CSS::ComputedProperties> m_computed_properties;
     HashMap<FlyString, CSS::StyleProperty> m_custom_properties;
 
     struct PseudoElement {
         GC::Ptr<Layout::NodeWithStyle> layout_node;
-        Optional<CSS::StyleProperties> computed_css_values;
+        GC::Ptr<CSS::CascadedProperties> cascaded_properties;
+        GC::Ptr<CSS::ComputedProperties> computed_properties;
         HashMap<FlyString, CSS::StyleProperty> custom_properties;
     };
     // TODO: CSS::Selector::PseudoElement::Type includes a lot of pseudo-elements that exist in shadow trees,
@@ -456,6 +487,11 @@ private:
     bool m_in_top_layer { false };
 
     OwnPtr<CSS::CountersSet> m_counters_set;
+
+    GC::Ptr<DOM::Element> m_aria_active_descendant_element;
+
+    // https://drafts.csswg.org/css-contain/#proximity-to-the-viewport
+    ProximityToTheViewport m_proximity_to_the_viewport { ProximityToTheViewport::NotDetermined };
 };
 
 template<>

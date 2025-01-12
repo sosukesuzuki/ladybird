@@ -5,7 +5,7 @@
  */
 
 #include <LibWeb/Bindings/HTMLBodyElementPrototype.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
@@ -41,22 +41,33 @@ void HTMLBodyElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLBodyElement);
 }
 
-void HTMLBodyElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLBodyElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::bgcolor,
+        HTML::AttributeNames::text,
+        HTML::AttributeNames::background);
+}
+
+void HTMLBodyElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         if (name.equals_ignoring_ascii_case("bgcolor"sv)) {
             // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
         } else if (name.equals_ignoring_ascii_case("text"sv)) {
             // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value-2
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(color.value()));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(color.value()));
         } else if (name.equals_ignoring_ascii_case("background"sv)) {
             VERIFY(m_background_style_value);
-            style.set_property(CSS::PropertyID::BackgroundImage, *m_background_style_value);
+            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundImage, *m_background_style_value);
         }
     });
 
@@ -84,7 +95,7 @@ void HTMLBodyElement::apply_presentational_hints(CSS::StyleProperties& style) co
         if (!value.has_value())
             return;
         if (auto parsed_value = parse_non_negative_integer(value.value()); parsed_value.has_value())
-            style.set_property(property_id, CSS::LengthStyleValue::create(CSS::Length::make_px(*parsed_value)));
+            cascaded_properties->set_property_from_presentational_hint(property_id, CSS::LengthStyleValue::create(CSS::Length::make_px(*parsed_value)));
     };
 
     apply_margin_value(CSS::PropertyID::MarginTop, margin_top_value);
@@ -113,7 +124,8 @@ void HTMLBodyElement::attribute_changed(FlyString const& name, Optional<String> 
         if (color.has_value())
             document().set_visited_link_color(color.value());
     } else if (name.equals_ignoring_ascii_case("background"sv)) {
-        m_background_style_value = CSS::ImageStyleValue::create(document().parse_url(value.value_or(String {})));
+        // https://html.spec.whatwg.org/multipage/rendering.html#the-page:attr-background
+        m_background_style_value = CSS::ImageStyleValue::create(document().encoding_parse_url(value.value_or(String {})));
         m_background_style_value->on_animate = [this] {
             if (paintable()) {
                 paintable()->set_needs_display();

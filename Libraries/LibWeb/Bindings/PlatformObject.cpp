@@ -296,7 +296,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::Pro
                 precomputed_get_own_property = &get_own_property_result;
             }
         }
-        if (m_legacy_platform_object_flags->has_legacy_override_built_ins_interface_extended_attribute || precomputed_get_own_property->has_value()) {
+        if (m_legacy_platform_object_flags->has_legacy_override_built_ins_interface_extended_attribute || !precomputed_get_own_property->has_value()) {
             // 1. If creating is false and O does not implement an interface with a named property setter, then return false.
             if (!creating && !m_legacy_platform_object_flags->has_named_property_setter)
                 return false;
@@ -400,7 +400,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_prevent_extensions()
 }
 
 // https://webidl.spec.whatwg.org/#legacy-platform-object-ownpropertykeys
-JS::ThrowCompletionOr<GC::MarkedVector<JS::Value>> PlatformObject::internal_own_property_keys() const
+JS::ThrowCompletionOr<GC::RootVector<JS::Value>> PlatformObject::internal_own_property_keys() const
 {
     if (!m_legacy_platform_object_flags.has_value() || m_legacy_platform_object_flags->has_global_interface_extended_attribute)
         return Base::internal_own_property_keys();
@@ -408,7 +408,7 @@ JS::ThrowCompletionOr<GC::MarkedVector<JS::Value>> PlatformObject::internal_own_
     auto& vm = this->vm();
 
     // 1. Let keys be a new empty list of ECMAScript String and Symbol values.
-    GC::MarkedVector<JS::Value> keys { heap() };
+    GC::RootVector<JS::Value> keys { heap() };
 
     // 2. If O supports indexed properties, then for each index of O’s supported property indices, in ascending numerical order, append ! ToString(index) to keys.
     if (m_legacy_platform_object_flags->supports_indexed_properties) {

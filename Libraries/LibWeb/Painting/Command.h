@@ -164,12 +164,12 @@ struct PaintTextShadow {
     double glyph_run_scale { 1 };
     Gfx::IntRect shadow_bounding_rect;
     Gfx::IntRect text_rect;
-    Gfx::IntPoint draw_location;
+    Gfx::FloatPoint draw_location;
     int blur_radius;
     Color color;
 
-    [[nodiscard]] Gfx::IntRect bounding_rect() const { return { draw_location, shadow_bounding_rect.size() }; }
-    void translate_by(Gfx::IntPoint const& offset) { draw_location.translate_by(offset); }
+    [[nodiscard]] Gfx::IntRect bounding_rect() const { return { draw_location.to_type<int>(), shadow_bounding_rect.size() }; }
+    void translate_by(Gfx::IntPoint const& offset) { draw_location.translate_by(offset.to_type<float>()); }
 };
 
 struct FillRectWithRoundedCorners {
@@ -300,7 +300,7 @@ struct DrawLine {
 struct ApplyBackdropFilter {
     Gfx::IntRect backdrop_region;
     BorderRadiiData border_radii_data;
-    CSS::ResolvedFilter backdrop_filter;
+    Vector<Gfx::Filter> backdrop_filter;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return backdrop_region; }
 
@@ -408,7 +408,7 @@ struct ApplyOpacity {
 };
 
 struct ApplyFilters {
-    CSS::ResolvedFilter filter;
+    Vector<Gfx::Filter> filter;
 };
 
 struct ApplyTransform {

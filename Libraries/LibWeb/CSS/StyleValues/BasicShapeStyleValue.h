@@ -17,7 +17,7 @@ namespace Web::CSS {
 
 struct Inset {
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Inset const&) const = default;
 
@@ -26,7 +26,7 @@ struct Inset {
 
 struct Xywh {
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Xywh const&) const = default;
 
@@ -38,7 +38,7 @@ struct Xywh {
 
 struct Rect {
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Rect const&) const = default;
 
@@ -54,7 +54,7 @@ using ShapeRadius = Variant<LengthPercentage, FitSide>;
 
 struct Circle {
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Circle const&) const = default;
 
@@ -64,7 +64,7 @@ struct Circle {
 
 struct Ellipse {
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Ellipse const&) const = default;
 
@@ -81,7 +81,7 @@ struct Polygon {
     };
 
     Gfx::Path to_path(CSSPixelRect reference_box, Layout::Node const&) const;
-    String to_string() const;
+    String to_string(CSSStyleValue::SerializationMode) const;
 
     bool operator==(Polygon const&) const = default;
 
@@ -102,7 +102,7 @@ public:
 
     BasicShape const& basic_shape() const { return m_basic_shape; }
 
-    virtual String to_string() const override;
+    virtual String to_string(SerializationMode) const override;
 
     bool properties_equal(BasicShapeStyleValue const& other) const { return m_basic_shape == other.m_basic_shape; }
 

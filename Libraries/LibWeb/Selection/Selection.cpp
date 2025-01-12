@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-2022, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,7 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/SelectionPrototype.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/Position.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/DOM/Text.h>
@@ -134,8 +136,14 @@ String Selection::direction() const
 // https://w3c.github.io/selection-api/#dom-selection-getrangeat
 WebIDL::ExceptionOr<GC::Ptr<DOM::Range>> Selection::get_range_at(unsigned index)
 {
-    // The method must throw an IndexSizeError exception if index is not 0, or if this is empty.
-    if (index != 0 || is_empty())
+    GC::Ptr<DOM::Node> focus = focus_node();
+    GC::Ptr<DOM::Node> anchor = anchor_node();
+
+    // The method must throw an IndexSizeError exception if index is not 0, or if this is empty or either focus or anchor is not in the document tree.
+    auto is_focus_in_document_tree = focus && &focus->document() == document();
+    auto is_anchor_in_document_tree = anchor && &anchor->document() == document();
+
+    if (index != 0 || is_empty() || !is_focus_in_document_tree || !is_anchor_in_document_tree)
         return WebIDL::IndexSizeError::create(realm(), "Selection.getRangeAt() on empty Selection or with invalid argument"_string);
 
     // Otherwise, it must return a reference to (not a copy of) this's range.
@@ -196,28 +204,25 @@ WebIDL::ExceptionOr<void> Selection::collapse(GC::Ptr<DOM::Node> node, unsigned 
         return {};
     }
 
-    // FIXME: Update this to match the spec once the spec is updated.
-    // Spec PR: https://github.com/w3c/selection-api/pull/342
-    if (node->is_document_type()) {
+    // 2. If node is a DocumentType, throw an InvalidNodeTypeError exception and abort these steps.
+    if (node->is_document_type())
         return WebIDL::InvalidNodeTypeError::create(realm(), "Selection.collapse() with DocumentType node"_string);
-    }
 
-    // 2. The method must throw an IndexSizeError exception if offset is longer than node's length and abort these steps.
-    if (offset > node->length()) {
+    // 3. The method must throw an IndexSizeError exception if offset is longer than node's length and abort these steps.
+    if (offset > node->length())
         return WebIDL::IndexSizeError::create(realm(), "Selection.collapse() with offset longer than node's length"_string);
-    }
 
-    // 3. If document associated with this is not a shadow-including inclusive ancestor of node, abort these steps.
+    // 4. If document associated with this is not a shadow-including inclusive ancestor of node, abort these steps.
     if (!m_document->is_shadow_including_inclusive_ancestor_of(*node))
         return {};
 
-    // 4. Otherwise, let newRange be a new range.
+    // 5. Otherwise, let newRange be a new range.
     auto new_range = DOM::Range::create(*m_document);
 
-    // 5. Set the start the start and the end of newRange to (node, offset).
+    // 6. Set the start the start and the end of newRange to (node, offset).
     TRY(new_range->set_start(*node, offset));
 
-    // 6. Set this's range to newRange.
+    // 7. Set this's range to newRange.
     set_range(new_range);
 
     return {};
@@ -242,8 +247,8 @@ WebIDL::ExceptionOr<void> Selection::collapse_to_start()
     auto new_range = DOM::Range::create(*m_document);
 
     // 3. Set the start both its start and end to the start of this's range
-    TRY(new_range->set_start(*anchor_node(), m_range->start_offset()));
-    TRY(new_range->set_end(*anchor_node(), m_range->start_offset()));
+    TRY(new_range->set_start(*m_range->start_container(), m_range->start_offset()));
+    TRY(new_range->set_end(*m_range->start_container(), m_range->start_offset()));
 
     // 4. Then set this's range to the newly-created range.
     set_range(new_range);
@@ -262,8 +267,8 @@ WebIDL::ExceptionOr<void> Selection::collapse_to_end()
     auto new_range = DOM::Range::create(*m_document);
 
     // 3. Set the start both its start and end to the start of this's range
-    TRY(new_range->set_start(*anchor_node(), m_range->end_offset()));
-    TRY(new_range->set_end(*anchor_node(), m_range->end_offset()));
+    TRY(new_range->set_start(*m_range->end_container(), m_range->end_offset()));
+    TRY(new_range->set_end(*m_range->end_container(), m_range->end_offset()));
 
     // 4. Then set this's range to the newly-created range.
     set_range(new_range);
@@ -299,7 +304,7 @@ WebIDL::ExceptionOr<void> Selection::extend(GC::Ref<DOM::Node> node, unsigned of
         TRY(new_range->set_end(new_focus_node, new_focus_offset));
     }
     // 6. Otherwise, if oldAnchor is before or equal to newFocus, set the start newRange's start to oldAnchor, then set its end to newFocus.
-    else if (position_of_boundary_point_relative_to_other_boundary_point(old_anchor_node, old_anchor_offset, new_focus_node, new_focus_offset) != DOM::RelativeBoundaryPointPosition::After) {
+    else if (DOM::position_of_boundary_point_relative_to_other_boundary_point({ old_anchor_node, old_anchor_offset }, { new_focus_node, new_focus_offset }) != DOM::RelativeBoundaryPointPosition::After) {
         TRY(new_range->set_start(old_anchor_node, old_anchor_offset));
         TRY(new_range->set_end(new_focus_node, new_focus_offset));
     }
@@ -313,7 +318,7 @@ WebIDL::ExceptionOr<void> Selection::extend(GC::Ref<DOM::Node> node, unsigned of
     set_range(new_range);
 
     // 9. If newFocus is before oldAnchor, set this's direction to backwards. Otherwise, set it to forwards.
-    if (position_of_boundary_point_relative_to_other_boundary_point(new_focus_node, new_focus_offset, old_anchor_node, old_anchor_offset) == DOM::RelativeBoundaryPointPosition::Before) {
+    if (DOM::position_of_boundary_point_relative_to_other_boundary_point({ new_focus_node, new_focus_offset }, { old_anchor_node, old_anchor_offset }) == DOM::RelativeBoundaryPointPosition::Before) {
         m_direction = Direction::Backwards;
     } else {
         m_direction = Direction::Forwards;
@@ -342,7 +347,7 @@ WebIDL::ExceptionOr<void> Selection::set_base_and_extent(GC::Ref<DOM::Node> anch
     auto new_range = DOM::Range::create(*m_document);
 
     // 5. If anchor is before focus, set the start the newRange's start to anchor and its end to focus. Otherwise, set the start them to focus and anchor respectively.
-    auto position_of_anchor_relative_to_focus = DOM::position_of_boundary_point_relative_to_other_boundary_point(anchor_node, anchor_offset, focus_node, focus_offset);
+    auto position_of_anchor_relative_to_focus = DOM::position_of_boundary_point_relative_to_other_boundary_point({ anchor_node, anchor_offset }, { focus_node, focus_offset });
     if (position_of_anchor_relative_to_focus == DOM::RelativeBoundaryPointPosition::Before) {
         TRY(new_range->set_start(anchor_node, anchor_offset));
         TRY(new_range->set_end(focus_node, focus_offset));
@@ -367,30 +372,28 @@ WebIDL::ExceptionOr<void> Selection::set_base_and_extent(GC::Ref<DOM::Node> anch
 // https://w3c.github.io/selection-api/#dom-selection-selectallchildren
 WebIDL::ExceptionOr<void> Selection::select_all_children(GC::Ref<DOM::Node> node)
 {
-    // FIXME: Update this to match the spec once the spec is updated.
-    // Spec PR: https://github.com/w3c/selection-api/pull/342
-    if (node->is_document_type()) {
+    // 1. If node is a DocumentType, throw an InvalidNodeTypeError exception and abort these steps.
+    if (node->is_document_type())
         return WebIDL::InvalidNodeTypeError::create(realm(), "Selection.selectAllChildren() with DocumentType node"_string);
-    }
 
-    // 1. If node's root is not the document associated with this, abort these steps.
+    // 2. If node's root is not the document associated with this, abort these steps.
     if (&node->root() != m_document.ptr())
         return {};
 
-    // 2. Let newRange be a new range and childCount be the number of children of node.
+    // 3. Let newRange be a new range and childCount be the number of children of node.
     auto new_range = DOM::Range::create(*m_document);
     auto child_count = node->child_count();
 
-    // 3. Set newRange's start to (node, 0).
+    // 4. Set newRange's start to (node, 0).
     TRY(new_range->set_start(node, 0));
 
-    // 4. Set newRange's end to (node, childCount).
+    // 5. Set newRange's end to (node, childCount).
     TRY(new_range->set_end(node, child_count));
 
-    // 5. Set this's range to newRange.
+    // 6. Set this's range to newRange.
     set_range(new_range);
 
-    // 6. Set this's direction to forwards.
+    // 7. Set this's direction to forwards.
     m_direction = Direction::Forwards;
 
     return {};
@@ -419,16 +422,8 @@ bool Selection::contains_node(GC::Ref<DOM::Node> node, bool allow_partial_contai
     // start of its range is before or visually equivalent to the first boundary point in the node
     // and end of its range is after or visually equivalent to the last boundary point in the node.
     if (!allow_partial_containment) {
-        auto start_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(
-            *m_range->start_container(),
-            m_range->start_offset(),
-            node,
-            0);
-        auto end_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(
-            *m_range->end_container(),
-            m_range->end_offset(),
-            node,
-            node->length());
+        auto start_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(m_range->start(), { node, 0 });
+        auto end_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(m_range->end(), { node, static_cast<WebIDL::UnsignedLong>(node->length()) });
 
         return (start_relative_position == DOM::RelativeBoundaryPointPosition::Before || start_relative_position == DOM::RelativeBoundaryPointPosition::Equal)
             && (end_relative_position == DOM::RelativeBoundaryPointPosition::Equal || end_relative_position == DOM::RelativeBoundaryPointPosition::After);
@@ -438,16 +433,8 @@ bool Selection::contains_node(GC::Ref<DOM::Node> node, bool allow_partial_contai
     // start of its range is before or visually equivalent to the last boundary point in the node
     // and end of its range is after or visually equivalent to the first boundary point in the node.
 
-    auto start_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(
-        *m_range->start_container(),
-        m_range->start_offset(),
-        node,
-        node->length());
-    auto end_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(
-        *m_range->end_container(),
-        m_range->end_offset(),
-        node,
-        0);
+    auto start_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(m_range->start(), { node, static_cast<WebIDL::UnsignedLong>(node->length()) });
+    auto end_relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point(m_range->end(), { node, 0 });
 
     return (start_relative_position == DOM::RelativeBoundaryPointPosition::Before || start_relative_position == DOM::RelativeBoundaryPointPosition::Equal)
         && (end_relative_position == DOM::RelativeBoundaryPointPosition::Equal || end_relative_position == DOM::RelativeBoundaryPointPosition::After);
@@ -484,6 +471,13 @@ void Selection::set_range(GC::Ptr<DOM::Range> range)
 
     if (m_range)
         m_range->set_associated_selection({}, this);
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    // Whenever the number of ranges in the selection changes to something different, and whenever a boundary point of
+    // the range at a given index in the selection changes to something different, the state override and value override
+    // must be unset for every command.
+    m_document->reset_command_state_overrides();
+    m_document->reset_command_value_overrides();
 }
 
 GC::Ptr<DOM::Position> Selection::cursor_position() const

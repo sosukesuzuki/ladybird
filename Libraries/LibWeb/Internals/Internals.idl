@@ -6,6 +6,8 @@
 interface Internals {
 
     undefined signalTextTestIsDone(DOMString text);
+    undefined setTestTimeout(double milliseconds);
+
     undefined gc();
     object hitTest(double x, double y);
 
@@ -23,6 +25,7 @@ interface Internals {
     undefined click(double x, double y);
     undefined doubleclick(double x, double y);
     undefined middleClick(double x, double y);
+    undefined mouseDown(double x, double y);
     undefined movePointerTo(double x, double y);
     undefined wheel(double x, double y, double deltaX, double deltaY);
 
@@ -41,4 +44,6 @@ interface Internals {
     DOMString getComputedRole(Element element);
     DOMString getComputedLabel(Element element);
     unsigned short getEchoServerPort();
+
+    readonly attribute boolean headless;
 };

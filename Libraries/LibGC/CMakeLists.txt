@@ -5,6 +5,7 @@ set(SOURCES
     ConservativeVector.cpp
     ForeignCell.cpp
     Root.cpp
+    RootVector.cpp
     Heap.cpp
     HeapBlock.cpp
     Trace.cpp

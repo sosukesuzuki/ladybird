@@ -152,7 +152,6 @@ void Intrinsics::create_web_prototype_and_constructor<@prototype_class@>(JS::Rea
     m_constructors.set("@interface_name@"_fly_string, constructor);
 
     prototype->define_direct_property(vm.names.constructor, constructor.ptr(), JS::Attribute::Writable | JS::Attribute::Configurable);
-    constructor->define_direct_property(vm.names.name, JS::PrimitiveString::create(vm, "@interface_name@"_string), JS::Attribute::Configurable);
 )~~~");
 
         if (legacy_constructor.has_value()) {
@@ -160,9 +159,7 @@ void Intrinsics::create_web_prototype_and_constructor<@prototype_class@>(JS::Rea
             gen.set("legacy_constructor_class", legacy_constructor->constructor_class);
             gen.append(R"~~~(
     auto legacy_constructor = realm.create<@legacy_constructor_class@>(realm);
-    m_constructors.set("@legacy_interface_name@"_fly_string, legacy_constructor);
-
-    legacy_constructor->define_direct_property(vm.names.name, JS::PrimitiveString::create(vm, "@legacy_interface_name@"_string), JS::Attribute::Configurable);)~~~");
+    m_constructors.set("@legacy_interface_name@"_fly_string, legacy_constructor);)~~~");
         }
 
         gen.append(R"~~~(
@@ -309,6 +306,9 @@ void add_@global_object_snake_name@_exposed_interfaces(JS::Object& global)
         if (interface.is_namespace) {
             add_namespace(gen, interface.name, interface.namespace_class);
         } else if (!interface.extended_attributes.contains("LegacyNamespace"sv)) {
+            if (interface.extended_attributes.contains("LegacyNoInterfaceObject")) {
+                continue;
+            }
             if (class_name == "Window") {
                 add_interface(gen, interface.namespaced_name, interface.prototype_class, lookup_legacy_constructor(interface), interface.extended_attributes.get("LegacyWindowAlias"sv));
             } else {

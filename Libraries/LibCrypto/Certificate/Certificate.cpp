@@ -14,11 +14,6 @@
 #include <LibCrypto/ASN1/PEM.h>
 #include <LibCrypto/PK/EC.h>
 
-namespace {
-// Used by ASN1 macros
-static String s_error_string;
-}
-
 namespace Crypto::Certificate {
 
 static ErrorOr<Crypto::UnsignedBigInteger> parse_certificate_version(Crypto::ASN1::Decoder& decoder, Vector<StringView> current_scope)
@@ -87,7 +82,7 @@ static ErrorOr<AlgorithmIdentifier> parse_algorithm_identifier(Crypto::ASN1::Dec
     READ_OBJECT(ObjectIdentifier, Vector<int>, algorithm);
     POP_SCOPE();
 
-    constexpr static Array<Span<int const>, 12> known_algorithm_identifiers {
+    constexpr static Array<Span<int const>, 13> known_algorithm_identifiers {
         ASN1::rsa_encryption_oid,
         ASN1::rsa_md5_encryption_oid,
         ASN1::rsa_sha1_encryption_oid,
@@ -100,6 +95,7 @@ static ErrorOr<AlgorithmIdentifier> parse_algorithm_identifier(Crypto::ASN1::Dec
         ASN1::x25519_oid,
         ASN1::ed25519_oid,
         ASN1::x448_oid,
+        ASN1::ed448_oid,
     };
 
     bool is_known_algorithm = false;

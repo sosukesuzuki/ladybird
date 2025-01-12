@@ -18,8 +18,8 @@ GC_DEFINE_ALLOCATOR(AudioBufferSourceNode);
 AudioBufferSourceNode::AudioBufferSourceNode(JS::Realm& realm, GC::Ref<BaseAudioContext> context, AudioBufferSourceOptions const& options)
     : AudioScheduledSourceNode(realm, context)
     , m_buffer(options.buffer)
-    , m_playback_rate(AudioParam::create(realm, options.playback_rate, NumericLimits<float>::lowest(), NumericLimits<float>::max(), Bindings::AutomationRate::ARate))
-    , m_detune(AudioParam::create(realm, options.detune, NumericLimits<float>::lowest(), NumericLimits<float>::max(), Bindings::AutomationRate::ARate))
+    , m_playback_rate(AudioParam::create(realm, context, options.playback_rate, NumericLimits<float>::lowest(), NumericLimits<float>::max(), Bindings::AutomationRate::ARate))
+    , m_detune(AudioParam::create(realm, context, options.detune, NumericLimits<float>::lowest(), NumericLimits<float>::max(), Bindings::AutomationRate::ARate))
     , m_loop(options.loop)
     , m_loop_start(options.loop_start)
     , m_loop_end(options.loop_end)
@@ -31,7 +31,22 @@ AudioBufferSourceNode::~AudioBufferSourceNode() = default;
 // https://webaudio.github.io/web-audio-api/#dom-audiobuffersourcenode-buffer
 WebIDL::ExceptionOr<void> AudioBufferSourceNode::set_buffer(GC::Ptr<AudioBuffer> buffer)
 {
-    m_buffer = buffer;
+    // 1. Let new buffer be the AudioBuffer or null value to be assigned to buffer.
+    auto new_buffer = buffer;
+
+    // 2. If new buffer is not null and [[buffer set]] is true, throw an InvalidStateError and abort these steps.
+    if (new_buffer && m_buffer_set)
+        return WebIDL::InvalidStateError::create(realm(), "Buffer has already been set"_string);
+
+    // 3. If new buffer is not null, set [[buffer set]] to true.
+    if (new_buffer)
+        m_buffer_set = true;
+
+    // 4. Assign new buffer to the buffer attribute.
+    m_buffer = new_buffer;
+
+    // FIXME: 5. If start() has previously been called on this node, perform the operation acquire the content on buffer.
+
     return {};
 }
 
@@ -95,9 +110,30 @@ double AudioBufferSourceNode::loop_end() const
 // https://webaudio.github.io/web-audio-api/#dom-audiobuffersourcenode-start`
 WebIDL::ExceptionOr<void> AudioBufferSourceNode::start(Optional<double> when, Optional<double> offset, Optional<double> duration)
 {
-    (void)when;
-    (void)offset;
-    (void)duration;
+    // 1. If this AudioBufferSourceNode internal slot [[source started]] is true, an InvalidStateError exception MUST be thrown.
+    if (source_started())
+        return WebIDL::InvalidStateError::create(realm(), "AudioBufferSourceNode has already been started"_string);
+
+    // 2. Check for any errors that must be thrown due to parameter constraints described below. If any exception is thrown during this step, abort those steps.
+    // A RangeError exception MUST be thrown if when is negative.
+    if (when.has_value() && when.value() < 0)
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "when must not be negative"sv };
+
+    // A RangeError exception MUST be thrown if offset is negative
+    if (offset.has_value() && offset.value() < 0)
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "offset must not be negative"sv };
+
+    // A RangeError exception MUST be thrown if duration is negative.
+    if (duration.has_value() && duration.value() < 0)
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "duration must not be negative"sv };
+
+    // 3. Set the internal slot [[source started]] on this AudioBufferSourceNode to true.
+    set_source_started(true);
+
+    // FIXME: 4. Queue a control message to start the AudioBufferSourceNode, including the parameter values in the message.
+    // FIXME: 5. Acquire the contents of the buffer if the buffer has been set.
+    // FIXME: 6. Send a control message to the associated AudioContext to start running its rendering thread only when all the following conditions are met:
+
     dbgln("FIXME: Implement AudioBufferSourceNode::start(when, offset, duration)");
     return {};
 }
@@ -114,6 +150,17 @@ WebIDL::ExceptionOr<GC::Ref<AudioBufferSourceNode>> AudioBufferSourceNode::const
     // MUST initialize the AudioNode this, with context and options as arguments.
 
     auto node = realm.create<AudioBufferSourceNode>(realm, context, options);
+
+    // Default options for channel count and interpretation
+    // https://webaudio.github.io/web-audio-api/#AudioBufferSourceNode
+    AudioNodeDefaultOptions default_options;
+    default_options.channel_count = 2;
+    default_options.channel_count_mode = Bindings::ChannelCountMode::Max;
+    default_options.channel_interpretation = Bindings::ChannelInterpretation::Speakers;
+    // FIXME: Set tail-time to no
+
+    TRY(node->initialize_audio_node_options(options, default_options));
+
     return node;
 }
 

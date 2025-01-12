@@ -202,6 +202,12 @@ ErrorOr<NonnullOwnPtr<RoleType>> RoleType::build_role_object(Role role, bool foc
         return adopt_nonnull_own_or_enomem(new (nothrow) Form(data));
     case Role::generic:
         return adopt_nonnull_own_or_enomem(new (nothrow) Generic(data));
+    case Role::graphicsdocument:
+        return adopt_nonnull_own_or_enomem(new (nothrow) GraphicsDocument(data));
+    case Role::graphicsobject:
+        return adopt_nonnull_own_or_enomem(new (nothrow) GraphicsObject(data));
+    case Role::graphicssymbol:
+        return adopt_nonnull_own_or_enomem(new (nothrow) GraphicsSymbol(data));
     case Role::grid:
         return adopt_nonnull_own_or_enomem(static_cast<Composite*>(new (nothrow) Grid(data)));
     case Role::gridcell:
@@ -210,6 +216,8 @@ ErrorOr<NonnullOwnPtr<RoleType>> RoleType::build_role_object(Role role, bool foc
         return adopt_nonnull_own_or_enomem(new (nothrow) Group(data));
     case Role::heading:
         return adopt_nonnull_own_or_enomem(new (nothrow) Heading(data));
+    case Role::image:
+        return adopt_nonnull_own_or_enomem(new (nothrow) Img(data));
     case Role::img:
         return adopt_nonnull_own_or_enomem(new (nothrow) Img(data));
     case Role::input:
@@ -232,6 +240,8 @@ ErrorOr<NonnullOwnPtr<RoleType>> RoleType::build_role_object(Role role, bool foc
         return adopt_nonnull_own_or_enomem(new (nothrow) Main(data));
     case Role::marquee:
         return adopt_nonnull_own_or_enomem(new (nothrow) Marquee(data));
+    case Role::mark:
+        return adopt_nonnull_own_or_enomem(new (nothrow) Mark(data));
     case Role::math:
         return adopt_nonnull_own_or_enomem(new (nothrow) Math(data));
     case Role::meter:
@@ -278,6 +288,10 @@ ErrorOr<NonnullOwnPtr<RoleType>> RoleType::build_role_object(Role role, bool foc
         return adopt_nonnull_own_or_enomem(new (nothrow) Search(data));
     case Role::searchbox:
         return adopt_nonnull_own_or_enomem(new (nothrow) SearchBox(data));
+    case Role::sectionfooter:
+        return adopt_nonnull_own_or_enomem(new (nothrow) SectionFooter(data));
+    case Role::sectionheader:
+        return adopt_nonnull_own_or_enomem(new (nothrow) SectionHeader(data));
     case Role::separator:
         if (focusable)
             return adopt_nonnull_own_or_enomem(new (nothrow) FocusableSeparator(data));
@@ -293,6 +307,8 @@ ErrorOr<NonnullOwnPtr<RoleType>> RoleType::build_role_object(Role role, bool foc
         return adopt_nonnull_own_or_enomem(new (nothrow) Strong(data));
     case Role::subscript:
         return adopt_nonnull_own_or_enomem(new (nothrow) Subscript(data));
+    case Role::suggestion:
+        return adopt_nonnull_own_or_enomem(new (nothrow) Suggestion(data));
     case Role::superscript:
         return adopt_nonnull_own_or_enomem(new (nothrow) Superscript(data));
     case Role::switch_:

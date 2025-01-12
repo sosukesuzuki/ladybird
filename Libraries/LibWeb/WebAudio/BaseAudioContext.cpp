@@ -20,6 +20,7 @@
 #include <LibWeb/WebAudio/DynamicsCompressorNode.h>
 #include <LibWeb/WebAudio/GainNode.h>
 #include <LibWeb/WebAudio/OscillatorNode.h>
+#include <LibWeb/WebAudio/PannerNode.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/Promise.h>
 
@@ -27,9 +28,8 @@ namespace Web::WebAudio {
 
 BaseAudioContext::BaseAudioContext(JS::Realm& realm, float sample_rate)
     : DOM::EventTarget(realm)
-    , m_destination(AudioDestinationNode::construct_impl(realm, *this))
     , m_sample_rate(sample_rate)
-    , m_listener(AudioListener::create(realm))
+    , m_listener(AudioListener::create(realm, *this))
 {
 }
 
@@ -90,6 +90,30 @@ WebIDL::ExceptionOr<GC::Ref<ChannelMergerNode>> BaseAudioContext::create_channel
     return ChannelMergerNode::create(realm(), *this, options);
 }
 
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createconstantsource
+WebIDL::ExceptionOr<GC::Ref<ConstantSourceNode>> BaseAudioContext::create_constant_source()
+{
+    return ConstantSourceNode::create(realm(), *this);
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createdelay
+WebIDL::ExceptionOr<GC::Ref<DelayNode>> BaseAudioContext::create_delay(double max_delay_time)
+{
+    DelayOptions options;
+    options.max_delay_time = max_delay_time;
+
+    return DelayNode::create(realm(), *this, options);
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createchannelsplitter
+WebIDL::ExceptionOr<GC::Ref<ChannelSplitterNode>> BaseAudioContext::create_channel_splitter(WebIDL::UnsignedLong number_of_outputs)
+{
+    ChannelSplitterOptions options;
+    options.number_of_outputs = number_of_outputs;
+
+    return ChannelSplitterNode::create(realm(), *this, options);
+}
+
 // https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createoscillator
 WebIDL::ExceptionOr<GC::Ref<OscillatorNode>> BaseAudioContext::create_oscillator()
 {
@@ -109,6 +133,24 @@ WebIDL::ExceptionOr<GC::Ref<GainNode>> BaseAudioContext::create_gain()
 {
     // Factory method for GainNode.
     return GainNode::create(realm(), *this);
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createpanner
+WebIDL::ExceptionOr<GC::Ref<PannerNode>> BaseAudioContext::create_panner()
+{
+    // Factory method for a PannerNode.
+    return PannerNode::create(realm(), *this);
+}
+
+WebIDL::ExceptionOr<GC::Ref<PeriodicWave>> BaseAudioContext::create_periodic_wave(Vector<float> const& real, Vector<float> const& imag, Optional<PeriodicWaveConstraints> const& constraints)
+{
+    PeriodicWaveOptions options;
+    options.real = real;
+    options.imag = imag;
+    if (constraints.has_value())
+        options.disable_normalization = constraints->disable_normalization;
+
+    return PeriodicWave::construct_impl(realm(), *this, options);
 }
 
 // https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createbuffer

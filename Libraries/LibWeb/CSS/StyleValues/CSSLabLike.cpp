@@ -7,7 +7,7 @@
 #include "CSSLabLike.h"
 #include <AK/TypeCasts.h>
 #include <LibWeb/CSS/Serialize.h>
-#include <LibWeb/CSS/StyleValues/CSSMathValue.h>
+#include <LibWeb/CSS/StyleValues/CalculatedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 
@@ -35,7 +35,7 @@ Color CSSOKLab::to_color(Optional<Layout::NodeWithStyle const&>) const
 }
 
 // https://www.w3.org/TR/css-color-4/#serializing-oklab-oklch
-String CSSOKLab::to_string() const
+String CSSOKLab::to_string(SerializationMode) const
 {
     // FIXME: Do this properly, taking unresolved calculated values into account.
     return serialize_a_srgb_value(to_color({}));
@@ -52,7 +52,7 @@ Color CSSLab::to_color(Optional<Layout::NodeWithStyle const&>) const
 }
 
 // https://www.w3.org/TR/css-color-4/#serializing-lab-lch
-String CSSLab::to_string() const
+String CSSLab::to_string(SerializationMode) const
 {
     // FIXME: Do this properly, taking unresolved calculated values into account.
     return serialize_a_srgb_value(to_color({}));

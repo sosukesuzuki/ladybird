@@ -112,6 +112,7 @@ void run_dump_test(HeadlessWebView& view, Test& test, URL::URL const& url, int t
     auto timer = Core::Timer::create_single_shot(timeout_in_milliseconds, [&view, &test]() {
         view.on_load_finish = {};
         view.on_text_test_finish = {};
+        view.on_set_test_timeout = {};
 
         view.on_test_complete({ test, TestResult::Timeout });
     });
@@ -233,6 +234,13 @@ void run_dump_test(HeadlessWebView& view, Test& test, URL::URL const& url, int t
         };
     }
 
+    view.on_set_test_timeout = [timer, timeout_in_milliseconds](double milliseconds) {
+        if (milliseconds <= timeout_in_milliseconds)
+            return;
+        timer->stop();
+        timer->start(milliseconds);
+    };
+
     view.load(url);
     timer->start();
 }
@@ -242,6 +250,7 @@ static void run_ref_test(HeadlessWebView& view, Test& test, URL::URL const& url,
     auto timer = Core::Timer::create_single_shot(timeout_in_milliseconds, [&view, &test]() {
         view.on_load_finish = {};
         view.on_text_test_finish = {};
+        view.on_set_test_timeout = {};
 
         view.on_test_complete({ test, TestResult::Timeout });
     });
@@ -313,6 +322,13 @@ static void run_ref_test(HeadlessWebView& view, Test& test, URL::URL const& url,
 
     view.on_text_test_finish = [&](auto const&) {
         dbgln("Unexpected text test finished during ref test for {}", url);
+    };
+
+    view.on_set_test_timeout = [timer, timeout_in_milliseconds](double milliseconds) {
+        if (milliseconds <= timeout_in_milliseconds)
+            return;
+        timer->stop();
+        timer->start(milliseconds);
     };
 
     view.load(url);
@@ -412,7 +428,14 @@ ErrorOr<void> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePixelSize
 #endif
 
     tests.remove_all_matching([&](auto const& test) {
-        return !test.input_path.matches(test_glob, CaseSensitivity::CaseSensitive);
+        static constexpr Array support_file_patterns {
+            "*/wpt-import/*/support/*"sv,
+            "*/wpt-import/*/resources/*"sv,
+            "*/wpt-import/common/*"sv,
+        };
+        bool is_support_file = any_of(support_file_patterns, [&](auto pattern) { return test.input_path.matches(pattern); });
+        bool match_glob = test.input_path.matches(test_glob, CaseSensitivity::CaseSensitive);
+        return is_support_file || !match_glob;
     });
 
     if (app.test_dry_run) {

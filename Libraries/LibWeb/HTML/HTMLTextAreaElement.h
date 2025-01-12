@@ -28,7 +28,7 @@ class HTMLTextAreaElement final
 public:
     virtual ~HTMLTextAreaElement() override;
 
-    virtual void adjust_computed_style(CSS::StyleProperties&) override;
+    virtual void adjust_computed_style(CSS::ComputedProperties&) override;
 
     String const& type() const
     {
@@ -64,11 +64,11 @@ public:
     virtual void reset_algorithm() override;
     virtual void clear_algorithm() override;
 
-    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) override;
+    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const override;
 
     virtual void form_associated_element_was_inserted() override;
     virtual void form_associated_element_was_removed(DOM::Node*) override;
-    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&) override;
+    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<FlyString> const&) override;
 
     virtual void children_changed() override;
 
@@ -156,9 +156,6 @@ private:
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-fe-dirty
     bool m_dirty_value { false };
-
-    // https://html.spec.whatwg.org/multipage/form-elements.html#the-textarea-element:concept-fe-mutable
-    bool m_is_mutable { true };
 
     // https://html.spec.whatwg.org/multipage/form-elements.html#concept-textarea-raw-value
     String m_raw_value;

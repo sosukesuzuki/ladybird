@@ -6,7 +6,7 @@
 
 #include <LibWeb/Bindings/HTMLHRElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/HTML/HTMLHRElement.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
@@ -28,13 +28,21 @@ void HTMLHRElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLHRElement);
 }
 
-void HTMLHRElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLHRElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name, HTML::AttributeNames::width);
+}
+
+void HTMLHRElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         // https://html.spec.whatwg.org/multipage/rendering.html#the-hr-element-2:maps-to-the-dimension-property
         if (name == HTML::AttributeNames::width) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::Width, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Width, *parsed_value);
             }
         }
     });

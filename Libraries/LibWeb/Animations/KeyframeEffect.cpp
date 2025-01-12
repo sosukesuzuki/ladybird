@@ -797,7 +797,7 @@ Optional<CSS::Selector::PseudoElement::Type> KeyframeEffect::pseudo_element_type
 }
 
 // https://www.w3.org/TR/web-animations-1/#dom-keyframeeffect-getkeyframes
-WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes()
+WebIDL::ExceptionOr<GC::RootVector<JS::Object*>> KeyframeEffect::get_keyframes()
 {
     if (m_keyframe_objects.size() != m_keyframes.size()) {
         auto& vm = this->vm();
@@ -811,7 +811,7 @@ WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes
             TRY(object->set(vm.names.offset, keyframe.offset.has_value() ? JS::Value(keyframe.offset.value()) : JS::js_null(), ShouldThrowExceptions::Yes));
             TRY(object->set(vm.names.computedOffset, JS::Value(keyframe.computed_offset.value()), ShouldThrowExceptions::Yes));
             auto easing_value = keyframe.easing.get<NonnullRefPtr<CSS::CSSStyleValue const>>();
-            TRY(object->set(vm.names.easing, JS::PrimitiveString::create(vm, easing_value->to_string()), ShouldThrowExceptions::Yes));
+            TRY(object->set(vm.names.easing, JS::PrimitiveString::create(vm, easing_value->to_string(CSS::CSSStyleValue::SerializationMode::Normal)), ShouldThrowExceptions::Yes));
 
             if (keyframe.composite == Bindings::CompositeOperationOrAuto::Replace) {
                 TRY(object->set(vm.names.composite, JS::PrimitiveString::create(vm, "replace"sv), ShouldThrowExceptions::Yes));
@@ -824,7 +824,7 @@ WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes
             }
 
             for (auto const& [id, value] : keyframe.parsed_properties()) {
-                auto value_string = JS::PrimitiveString::create(vm, value->to_string());
+                auto value_string = JS::PrimitiveString::create(vm, value->to_string(CSS::CSSStyleValue::SerializationMode::Normal));
                 TRY(object->set(JS::PropertyKey { DeprecatedFlyString(CSS::camel_case_string_from_property_id(id)), JS::PropertyKey::StringMayBeNumber::No }, value_string, ShouldThrowExceptions::Yes));
             }
 
@@ -832,7 +832,7 @@ WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes
         }
     }
 
-    GC::MarkedVector<JS::Object*> keyframes { heap() };
+    GC::RootVector<JS::Object*> keyframes { heap() };
     for (auto const& keyframe : m_keyframe_objects)
         keyframes.append(keyframe);
     return keyframes;
@@ -915,19 +915,19 @@ static CSS::RequiredInvalidationAfterStyleChange compute_required_invalidation(H
     return invalidation;
 }
 
-void KeyframeEffect::update_style_properties()
+void KeyframeEffect::update_computed_properties()
 {
     auto target = this->target();
-    if (!target)
+    if (!target || !target->is_connected())
         return;
 
-    Optional<CSS::StyleProperties&> style = {};
+    GC::Ptr<CSS::ComputedProperties> style = {};
     if (!pseudo_element_type().has_value())
-        style = target->computed_css_values();
+        style = target->computed_properties();
     else
-        style = target->pseudo_element_computed_css_values(pseudo_element_type().value());
+        style = target->pseudo_element_computed_properties(pseudo_element_type().value());
 
-    if (!style.has_value())
+    if (!style)
         return;
 
     auto animated_properties_before_update = style->animated_property_values();
@@ -935,24 +935,16 @@ void KeyframeEffect::update_style_properties()
     auto& document = target->document();
     document.style_computer().collect_animation_into(*target, pseudo_element_type(), *this, *style, CSS::StyleComputer::AnimationRefresh::Yes);
 
+    auto invalidation = compute_required_invalidation(animated_properties_before_update, style->animated_property_values());
+
     // Traversal of the subtree is necessary to update the animated properties inherited from the target element.
     target->for_each_in_subtree_of_type<DOM::Element>([&](auto& element) {
-        auto element_style = element.computed_css_values();
-        if (!element_style.has_value() || !element.layout_node())
-            return TraversalDecision::Continue;
-
-        for (auto i = to_underlying(CSS::first_property_id); i <= to_underlying(CSS::last_property_id); ++i) {
-            if (element_style->is_property_inherited(static_cast<CSS::PropertyID>(i))) {
-                auto new_value = CSS::StyleComputer::get_inherit_value(static_cast<CSS::PropertyID>(i), &element);
-                element_style->set_property(static_cast<CSS::PropertyID>(i), *new_value, CSS::StyleProperties::Inherited::Yes);
-            }
-        }
-
-        element.layout_node()->apply_style(*element_style);
+        auto element_invalidation = element.recompute_inherited_style();
+        if (element_invalidation.is_none())
+            return TraversalDecision::SkipChildrenAndContinue;
+        invalidation |= element_invalidation;
         return TraversalDecision::Continue;
     });
-
-    auto invalidation = compute_required_invalidation(animated_properties_before_update, style->animated_property_values());
 
     if (!pseudo_element_type().has_value()) {
         if (target->layout_node())

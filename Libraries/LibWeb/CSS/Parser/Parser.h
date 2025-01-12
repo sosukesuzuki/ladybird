@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/Error.h>
+#include <AK/NonnullRawPtr.h>
 #include <AK/RefPtr.h>
 #include <AK/Vector.h>
 #include <LibGfx/Font/UnicodeRange.h>
@@ -26,13 +27,36 @@
 #include <LibWeb/CSS/Ratio.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleValues/AbstractImageStyleValue.h>
-#include <LibWeb/CSS/StyleValues/CSSMathValue.h>
+#include <LibWeb/CSS/StyleValues/CalculatedStyleValue.h>
 #include <LibWeb/CSS/Supports.h>
 #include <LibWeb/Forward.h>
 
 namespace Web::CSS::Parser {
 
 class PropertyDependencyNode;
+
+namespace CalcParsing {
+struct Operator {
+    char delim;
+};
+struct ProductNode;
+struct SumNode;
+struct InvertNode;
+struct NegateNode;
+using Node = Variant<Operator, NonnullOwnPtr<ProductNode>, NonnullOwnPtr<SumNode>, NonnullOwnPtr<InvertNode>, NonnullOwnPtr<NegateNode>, NonnullRawPtr<ComponentValue const>>;
+struct ProductNode {
+    Vector<Node> children;
+};
+struct SumNode {
+    Vector<Node> children;
+};
+struct InvertNode {
+    Node child;
+};
+struct NegateNode {
+    Node child;
+};
+}
 
 class Parser {
 public:
@@ -233,7 +257,7 @@ private:
     RefPtr<CSSStyleValue> parse_basic_shape_value(TokenStream<ComponentValue>&);
 
     template<typename TElement>
-    Optional<Vector<TElement>> parse_color_stop_list(TokenStream<ComponentValue>& tokens, auto is_position, auto get_position);
+    Optional<Vector<TElement>> parse_color_stop_list(TokenStream<ComponentValue>& tokens, auto parse_position);
     Optional<Vector<LinearColorStopListElement>> parse_linear_color_stop_list(TokenStream<ComponentValue>&);
     Optional<Vector<AngularColorStopListElement>> parse_angular_color_stop_list(TokenStream<ComponentValue>&);
 
@@ -249,10 +273,10 @@ private:
     };
     Optional<PropertyAndValue> parse_css_value_for_properties(ReadonlySpan<PropertyID>, TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_builtin_value(TokenStream<ComponentValue>&);
-    RefPtr<CSSMathValue> parse_calculated_value(ComponentValue const&);
+    RefPtr<CalculatedStyleValue> parse_calculated_value(ComponentValue const&);
     RefPtr<CustomIdentStyleValue> parse_custom_ident_value(TokenStream<ComponentValue>&, std::initializer_list<StringView> blacklist);
     // NOTE: Implemented in generated code. (GenerateCSSMathFunctions.cpp)
-    OwnPtr<CalculationNode> parse_math_function(PropertyID, Function const&);
+    OwnPtr<CalculationNode> parse_math_function(Function const&);
     OwnPtr<CalculationNode> parse_a_calc_function_node(Function const&);
     RefPtr<CSSStyleValue> parse_keyword_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_hue_none_value(TokenStream<ComponentValue>&);
@@ -267,7 +291,9 @@ private:
     RefPtr<CSSStyleValue> parse_lch_color_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_oklch_color_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_color_function(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_light_dark_color_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_color_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_color_scheme_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_counter_value(TokenStream<ComponentValue>&);
     enum class AllowReversed {
         No,
@@ -287,7 +313,6 @@ private:
     RefPtr<CSSStyleValue> parse_filter_value_list_value(TokenStream<ComponentValue>&);
     RefPtr<StringStyleValue> parse_opentype_tag_value(TokenStream<ComponentValue>&);
 
-    RefPtr<CSSStyleValue> parse_dimension_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_angle_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_angle_percentage_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_flex_value(TokenStream<ComponentValue>&);
@@ -330,6 +355,13 @@ private:
     RefPtr<CSSStyleValue> parse_font_language_override_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_font_feature_settings_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_font_variation_settings_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_alternates_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_caps_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_east_asian_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_emoji(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_ligatures_value(TokenStream<ComponentValue>&);
+    RefPtr<CSSStyleValue> parse_font_variant_numeric_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_list_style_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_math_depth_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_overflow_value(TokenStream<ComponentValue>&);
@@ -364,6 +396,7 @@ private:
     RefPtr<CSSStyleValue> parse_grid_area_shorthand_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_grid_shorthand_value(TokenStream<ComponentValue>&);
 
+    OwnPtr<CalculationNode> convert_to_calculation_node(CalcParsing::Node const&);
     OwnPtr<CalculationNode> parse_a_calculation(Vector<ComponentValue> const&);
 
     ParseErrorOr<NonnullRefPtr<Selector>> parse_complex_selector(TokenStream<ComponentValue>&, SelectorType);

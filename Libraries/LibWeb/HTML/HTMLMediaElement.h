@@ -11,7 +11,7 @@
 #include <AK/Optional.h>
 #include <AK/Time.h>
 #include <AK/Variant.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibGfx/Rect.h>
 #include <LibWeb/DOM/DocumentLoadEventDelayer.h>
 #include <LibWeb/HTML/CORSSettingAttribute.h>
@@ -58,6 +58,20 @@ public:
 
     [[nodiscard]] GC::Ref<TimeRanges> buffered() const;
 
+    static inline constexpr auto supported_video_subtypes = Array {
+        "webm"sv,
+        "mp4"sv,
+        "mpeg"sv,
+        "ogg"sv,
+    };
+    static inline constexpr auto supported_audio_subtypes = Array {
+        "flac"sv,
+        "mp3"sv,
+        "mpeg"sv,
+        "ogg"sv,
+        "wav"sv,
+        "webm"sv,
+    };
     Bindings::CanPlayTypeResult can_play_type(StringView type) const;
 
     enum class ReadyState : u16 {
@@ -193,7 +207,7 @@ private:
     };
     void time_marches_on(TimeMarchesOnReason = TimeMarchesOnReason::NormalPlayback);
 
-    GC::MarkedVector<GC::Ref<WebIDL::Promise>> take_pending_play_promises();
+    GC::RootVector<GC::Ref<WebIDL::Promise>> take_pending_play_promises();
     void resolve_pending_play_promises(ReadonlySpan<GC::Ref<WebIDL::Promise>> promises);
     void reject_pending_play_promises(ReadonlySpan<GC::Ref<WebIDL::Promise>> promises, GC::Ref<WebIDL::DOMException> error);
 

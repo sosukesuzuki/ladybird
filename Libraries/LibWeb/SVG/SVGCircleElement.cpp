@@ -29,22 +29,33 @@ void SVGCircleElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGCircleElement);
 }
 
-void SVGCircleElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool SVGCircleElement::is_presentational_hint(FlyString const& name) const
 {
-    Base::apply_presentational_hints(style);
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        SVG::AttributeNames::cx,
+        SVG::AttributeNames::cy,
+        SVG::AttributeNames::r);
+}
+
+void SVGCircleElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
+{
+    Base::apply_presentational_hints(cascaded_properties);
     auto parsing_context = CSS::Parser::ParsingContext { document(), CSS::Parser::ParsingContext::Mode::SVGPresentationAttribute };
 
     auto cx_attribute = attribute(SVG::AttributeNames::cx);
     if (auto cx_value = parse_css_value(parsing_context, cx_attribute.value_or(String {}), CSS::PropertyID::Cx))
-        style.set_property(CSS::PropertyID::Cx, cx_value.release_nonnull());
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Cx, cx_value.release_nonnull());
 
     auto cy_attribute = attribute(SVG::AttributeNames::cy);
     if (auto cy_value = parse_css_value(parsing_context, cy_attribute.value_or(String {}), CSS::PropertyID::Cy))
-        style.set_property(CSS::PropertyID::Cy, cy_value.release_nonnull());
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Cy, cy_value.release_nonnull());
 
     auto r_attribute = attribute(SVG::AttributeNames::r);
     if (auto r_value = parse_css_value(parsing_context, r_attribute.value_or(String {}), CSS::PropertyID::R))
-        style.set_property(CSS::PropertyID::R, r_value.release_nonnull());
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::R, r_value.release_nonnull());
 }
 
 Gfx::Path SVGCircleElement::get_path(CSSPixelSize viewport_size)

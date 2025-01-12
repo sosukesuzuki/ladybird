@@ -84,6 +84,7 @@ enum class XMLHttpRequestResponseType;
 
 namespace Web::Clipboard {
 class Clipboard;
+class ClipboardItem;
 }
 
 namespace Web::Compression {
@@ -113,7 +114,9 @@ class BackgroundRepeatStyleValue;
 class BackgroundSizeStyleValue;
 class BasicShapeStyleValue;
 class BorderRadiusStyleValue;
+class CalculatedStyleValue;
 class Clip;
+class ColorSchemeStyleValue;
 class ConicGradientStyleValue;
 class ContentStyleValue;
 class CounterDefinitionsStyleValue;
@@ -131,7 +134,6 @@ class CSSKeyframesRule;
 class CSSKeywordValue;
 class CSSLayerBlockRule;
 class CSSLayerStatementRule;
-class CSSMathValue;
 class CSSMediaRule;
 class CSSNestedDeclarations;
 class CSSOKLab;
@@ -215,7 +217,7 @@ class ShorthandStyleValue;
 class Size;
 class StringStyleValue;
 class StyleComputer;
-class StyleProperties;
+class ComputedProperties;
 class StyleSheet;
 class StyleSheetList;
 class StyleValueList;
@@ -513,6 +515,7 @@ class PageTransitionEvent;
 class Path2D;
 class Plugin;
 class PluginArray;
+class PopoverInvokerElement;
 class PromiseRejectionEvent;
 class RadioNodeList;
 class SelectedFile;
@@ -549,6 +552,7 @@ enum class AllowMultipleFiles;
 enum class MediaSeekMode;
 enum class SandboxingFlagSet;
 
+struct Agent;
 struct EmbedderPolicy;
 struct Environment;
 struct EnvironmentSettingsObject;
@@ -750,6 +754,12 @@ struct UnderlyingSource;
 namespace Web::StorageAPI {
 class NavigatorStorage;
 class StorageManager;
+class StorageShed;
+
+struct StorageBottle;
+struct StorageBucket;
+struct StorageEndpoint;
+struct StorageShelf;
 }
 
 namespace Web::SVG {
@@ -800,6 +810,7 @@ class PerformanceMeasure;
 }
 
 namespace Web::WebAssembly {
+class Global;
 class Instance;
 class Memory;
 class Module;
@@ -821,6 +832,7 @@ class DynamicsCompressorNode;
 class GainNode;
 class OfflineAudioContext;
 class OscillatorNode;
+class PannerNode;
 class PeriodicWave;
 
 enum class AudioContextState;
@@ -841,8 +853,10 @@ class WebGLObject;
 class WebGLProgram;
 class WebGLRenderbuffer;
 class WebGLRenderingContext;
+class WebGLSampler;
 class WebGLShader;
 class WebGLShaderPrecisionFormat;
+class WebGLSync;
 class WebGLTexture;
 class WebGLUniformLocation;
 class WebGLVertexArrayObject;

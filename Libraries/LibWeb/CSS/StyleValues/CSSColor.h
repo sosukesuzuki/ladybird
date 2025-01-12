@@ -19,7 +19,7 @@ public:
 
     virtual bool equals(CSSStyleValue const&) const override;
     virtual Color to_color(Optional<Layout::NodeWithStyle const&>) const override;
-    virtual String to_string() const override;
+    virtual String to_string(SerializationMode) const override;
 
     static constexpr Array s_supported_color_space = { "a98-rgb"sv, "display-p3"sv, "srgb"sv, "srgb-linear"sv, "prophoto-rgb"sv, "rec2020"sv, "xyz"sv, "xyz-d50"sv, "xyz-d65"sv };
 
@@ -34,7 +34,16 @@ private:
         Array<ValueComparingNonnullRefPtr<CSSStyleValue>, 3> channels;
         ValueComparingNonnullRefPtr<CSSStyleValue> alpha;
         bool operator==(Properties const&) const = default;
-    } m_properties;
+    };
+
+    struct Resolved {
+        Array<float, 3> channels {};
+        float alpha {};
+    };
+
+    Resolved resolve_properties() const;
+
+    Properties m_properties;
 };
 
 } // Web::CSS

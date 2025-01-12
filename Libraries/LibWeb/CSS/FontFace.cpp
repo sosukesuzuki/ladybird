@@ -214,7 +214,7 @@ WebIDL::ExceptionOr<void> FontFace::set_family(String const& string)
         // FIXME: Propagate to the CSSFontFaceRule and update the font-family property
     }
 
-    m_family = property->to_string();
+    m_family = property->to_string(CSSStyleValue::SerializationMode::Normal);
 
     return {};
 }
@@ -230,7 +230,7 @@ WebIDL::ExceptionOr<void> FontFace::set_style(String const& string)
         // FIXME: Propagate to the CSSFontFaceRule and update the font-style property
     }
 
-    m_style = property->to_string();
+    m_style = property->to_string(CSSStyleValue::SerializationMode::Normal);
 
     return {};
 }
@@ -246,7 +246,7 @@ WebIDL::ExceptionOr<void> FontFace::set_weight(String const& string)
         // FIXME: Propagate to the CSSFontFaceRule and update the font-weight property
     }
 
-    m_weight = property->to_string();
+    m_weight = property->to_string(CSSStyleValue::SerializationMode::Normal);
 
     return {};
 }
@@ -263,7 +263,7 @@ WebIDL::ExceptionOr<void> FontFace::set_stretch(String const& string)
         // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
     }
 
-    m_stretch = property->to_string();
+    m_stretch = property->to_string(CSSStyleValue::SerializationMode::Normal);
 
     return {};
 }
@@ -322,21 +322,6 @@ GC::Ref<WebIDL::Promise> FontFace::load()
     //    return font face’s [[FontStatusPromise]] and abort these steps.
     if (font_face.m_urls.is_empty() || font_face.m_status != Bindings::FontFaceLoadStatus::Unloaded)
         return font_face.loaded();
-
-    load_font_source();
-
-    return font_face.loaded();
-}
-
-void FontFace::load_font_source()
-{
-    VERIFY(!m_urls.is_empty() && m_status == Bindings::FontFaceLoadStatus::Unloaded);
-    // NOTE: These steps are from the load() method, but can also be called by the user agent when the font
-    //       is needed to render something on the page.
-
-    // User agents can initiate font loads on their own, whenever they determine that a given font face is necessary
-    // to render something on the page. When this happens, they must act as if they had called the corresponding
-    // FontFace’s load() method described here.
 
     // 3. Otherwise, set font face’s status attribute to "loading", return font face’s [[FontStatusPromise]],
     //    and continue executing the rest of this algorithm asynchronously.
@@ -405,6 +390,12 @@ void FontFace::load_font_source()
             dbgln("FIXME: Worker font loading not implemented");
         }
     }));
+
+    // User agents can initiate font loads on their own, whenever they determine that a given font face is necessary
+    // to render something on the page. When this happens, they must act as if they had called the corresponding
+    // FontFace’s load() method described here.
+
+    return font_face.loaded();
 }
 
 }

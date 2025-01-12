@@ -59,13 +59,13 @@ void HTMLScriptElement::attribute_changed(FlyString const& name, Optional<String
     } else if (name == HTML::AttributeNames::referrerpolicy) {
         m_referrer_policy = ReferrerPolicy::from_string(value.value_or(""_string)).value_or(ReferrerPolicy::ReferrerPolicy::EmptyString);
     } else if (name == HTML::AttributeNames::src) {
-        // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-        // When a script element el that is not parser-inserted experiences one of the events listed in the following list, the user agent must immediately prepare the script element el:
-        // - [...]
-        // - The script element is connected and has a src attribute set where previously the element had no such attribute.
-        if (!is_parser_inserted() && is_connected() && value.has_value() && !old_value.has_value()) {
-            prepare_script();
-        }
+        // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:html-element-post-connection-steps-6
+        // 1. If namespace is not null, then return.
+        if (namespace_.has_value())
+            return;
+
+        // 2. If localName is src, then run the script HTML element post-connection steps, given element.
+        post_connection();
     } else if (name == HTML::AttributeNames::async) {
         // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:script-force-async
         // When an async attribute is added to a script element el, the user agent must set el's force async to false.
@@ -460,25 +460,10 @@ void HTMLScriptElement::prepare_script()
         }
         // -> "importmap"
         else if (m_script_type == ScriptType::ImportMap) {
-            // FIXME: need to check if relevant global object is a Window - is this correct?
-            auto& global = relevant_global_object(*this);
-
-            // 1. If el's relevant global object's import maps allowed is false, then queue an element task on the DOM manipulation task source given el to fire an event named error at el, and return.
-            if (is<Window>(global) && !verify_cast<Window>(global).import_maps_allowed()) {
-                queue_an_element_task(HTML::Task::Source::DOMManipulation, [this] {
-                    dispatch_event(DOM::Event::create(realm(), HTML::EventNames::error));
-                });
-                return;
-            }
-
-            // 2. Set el's relevant global object's import maps allowed to false.
-            if (is<Window>(global))
-                verify_cast<Window>(global).set_import_maps_allowed(false);
-
-            // 3. Let result be the result of creating an import map parse result given source text and base URL.
+            // 1. Let result be the result of creating an import map parse result given source text and base URL.
             auto result = ImportMapParseResult::create(realm(), source_text.to_byte_string(), base_url);
 
-            // 4. Mark as ready el given result.
+            // 2. Mark as ready el given result.
             mark_as_ready(Result(move(result)));
         }
     }
@@ -586,15 +571,26 @@ void HTMLScriptElement::prepare_script()
     }
 }
 
-void HTMLScriptElement::inserted()
+// https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:html-element-post-connection-steps-4
+void HTMLScriptElement::children_changed()
 {
-    if (!is_parser_inserted()) {
-        // FIXME: Only do this if the element was previously not connected.
-        if (is_connected()) {
-            prepare_script();
-        }
-    }
-    HTMLElement::inserted();
+    // 1. Run the script HTML element post-connection steps, given the script element.
+    post_connection();
+}
+
+// https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:prepare-the-script-element-5
+void HTMLScriptElement::post_connection()
+{
+    // 1. If insertedNode is not connected, then return.
+    if (!is_connected())
+        return;
+
+    // 2. If insertedNode is parser-inserted, then return.
+    if (is_parser_inserted())
+        return;
+
+    // 3. Prepare the script element given insertedNode.
+    prepare_script();
 }
 
 // https://html.spec.whatwg.org/multipage/scripting.html#mark-as-ready
@@ -652,6 +648,18 @@ void HTMLScriptElement::set_async(bool async)
     else {
         remove_attribute(HTML::AttributeNames::async);
     }
+}
+
+// https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:concept-node-clone-ext
+WebIDL::ExceptionOr<void> HTMLScriptElement::cloned(Node& copy, bool subtree) const
+{
+    TRY(Base::cloned(copy, subtree));
+
+    // The cloning steps for script elements given node, copy, and subtree are to set copy's already started to node's already started.
+    auto& script_copy = verify_cast<HTMLScriptElement>(copy);
+    script_copy.m_already_started = m_already_started;
+
+    return {};
 }
 
 }

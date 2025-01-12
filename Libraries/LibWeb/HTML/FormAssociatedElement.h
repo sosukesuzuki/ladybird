@@ -49,7 +49,7 @@ private:                                                                        
     {                                                                                                                                                                       \
         ElementBaseClass::attribute_changed(name, old_value, value, namespace_);                                                                                            \
         form_node_attribute_changed(name, value);                                                                                                                           \
-        form_associated_element_attribute_changed(name, value);                                                                                                             \
+        form_associated_element_attribute_changed(name, value, namespace_);                                                                                                 \
     }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#selection-direction
@@ -110,7 +110,7 @@ protected:
 
     virtual void form_associated_element_was_inserted() { }
     virtual void form_associated_element_was_removed(DOM::Node*) { }
-    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&) { }
+    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<FlyString> const&) { }
 
     void form_node_was_inserted();
     void form_node_was_removed();
@@ -143,12 +143,14 @@ public:
     WebIDL::ExceptionOr<void> select();
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-selectionstart
-    Optional<WebIDL::UnsignedLong> selection_start() const;
-    WebIDL::ExceptionOr<void> set_selection_start(Optional<WebIDL::UnsignedLong> const&);
+    Optional<WebIDL::UnsignedLong> selection_start_binding() const;
+    WebIDL::ExceptionOr<void> set_selection_start_binding(Optional<WebIDL::UnsignedLong> const&);
+    WebIDL::UnsignedLong selection_start() const;
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-selectionend
-    Optional<WebIDL::UnsignedLong> selection_end() const;
-    WebIDL::ExceptionOr<void> set_selection_end(Optional<WebIDL::UnsignedLong> const&);
+    Optional<WebIDL::UnsignedLong> selection_end_binding() const;
+    WebIDL::ExceptionOr<void> set_selection_end_binding(Optional<WebIDL::UnsignedLong> const&);
+    WebIDL::UnsignedLong selection_end() const;
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-selectiondirection
     Optional<String> selection_direction() const;
@@ -157,7 +159,8 @@ public:
     SelectionDirection selection_direction_state() const { return m_selection_direction; }
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-setrangetext
-    WebIDL::ExceptionOr<void> set_range_text(String const& replacement);
+    WebIDL::ExceptionOr<void> set_range_text_binding(String const& replacement);
+    WebIDL::ExceptionOr<void> set_range_text_binding(String const& replacement, WebIDL::UnsignedLong start, WebIDL::UnsignedLong end, Bindings::SelectionMode = Bindings::SelectionMode::Preserve);
     WebIDL::ExceptionOr<void> set_range_text(String const& replacement, WebIDL::UnsignedLong start, WebIDL::UnsignedLong end, Bindings::SelectionMode = Bindings::SelectionMode::Preserve);
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-setselectionrange
@@ -169,6 +172,9 @@ public:
     // https://w3c.github.io/selection-api/#dfn-has-scheduled-selectionchange-event
     bool has_scheduled_selectionchange_event() const { return m_has_scheduled_selectionchange_event; }
     void set_scheduled_selectionchange_event(bool value) { m_has_scheduled_selectionchange_event = value; }
+
+    bool is_mutable() const { return m_is_mutable; }
+    void set_is_mutable(bool is_mutable) { m_is_mutable = is_mutable; }
 
     virtual void did_edit_text_node() = 0;
 
@@ -205,6 +211,9 @@ private:
 
     // https://w3c.github.io/selection-api/#dfn-has-scheduled-selectionchange-event
     bool m_has_scheduled_selectionchange_event { false };
+
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#mutability
+    bool m_is_mutable { true };
 };
 
 }

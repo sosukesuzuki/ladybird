@@ -7,7 +7,6 @@
  */
 
 #include <AK/Demangle.h>
-#include <AK/HashMap.h>
 #include <AK/HashTable.h>
 #include <AK/QuickSort.h>
 #include <AK/ScopeGuard.h>
@@ -15,7 +14,7 @@
 #include <AK/TemporaryChange.h>
 #include <LibCrypto/BigInt/SignedBigInteger.h>
 #include <LibGC/ConservativeVector.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/AST.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Accessor.h>

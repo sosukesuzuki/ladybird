@@ -25,7 +25,8 @@ public:
 
     GC::Ref<SVGAnimatedNumber> offset() const;
 
-    virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
+    virtual bool is_presentational_hint(FlyString const&) const override;
+    virtual void apply_presentational_hints(GC::Ref<CSS::CascadedProperties>) const override;
 
     NumberPercentage stop_offset() const { return m_offset.value_or(NumberPercentage::create_number(0)); }
     Gfx::Color stop_color() const;

@@ -263,11 +263,11 @@ bool is_unknown_html_element(FlyString const& tag_name)
     if (tag_name.is_one_of(HTML::TagNames::applet, HTML::TagNames::bgsound, HTML::TagNames::blink, HTML::TagNames::isindex, HTML::TagNames::keygen, HTML::TagNames::multicol, HTML::TagNames::nextid, HTML::TagNames::spacer))
         return true;
 
-        // 2. If name is acronym, basefont, big, center, nobr, noembed, noframes, plaintext, rb, rtc, strike, or tt, then return HTMLElement.
-        // 3. If name is listing or xmp, then return HTMLPreElement.
-        // 4. Otherwise, if this specification defines an interface appropriate for the element type corresponding to the local name name, then return that interface.
-        // 5. If other applicable specifications define an appropriate interface for name, then return the interface they define.
-#define __ENUMERATE_HTML_TAG(name)        \
+    // 2. If name is acronym, basefont, big, center, nobr, noembed, noframes, plaintext, rb, rtc, strike, or tt, then return HTMLElement.
+    // 3. If name is listing or xmp, then return HTMLPreElement.
+    // 4. Otherwise, if this specification defines an interface appropriate for the element type corresponding to the local name name, then return that interface.
+    // 5. If other applicable specifications define an appropriate interface for name, then return the interface they define.
+#define __ENUMERATE_HTML_TAG(name, tag)   \
     if (tag_name == HTML::TagNames::name) \
         return false;
     ENUMERATE_HTML_TAGS
@@ -576,15 +576,17 @@ WebIDL::ExceptionOr<GC::Ref<Element>> create_element(Document& document, FlyStri
                 // 2. Set result to the result of constructing C, with no arguments.
                 auto result = TRY(WebIDL::construct(constructor));
 
-                // FIXME: 3. Assert: result’s custom element state and custom element definition are initialized.
-                // FIXME: 4. Assert: result’s namespace is the HTML namespace.
-                //        Spec Note: IDL enforces that result is an HTMLElement object, which all use the HTML namespace.
-                // IDL does not currently convert the object for us, so we will have to do it here.
-
+                // NOTE: IDL does not currently convert the object for us, so we will have to do it here.
                 if (!result.has_value() || !result->is_object() || !is<HTML::HTMLElement>(result->as_object()))
                     return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "HTMLElement"sv);
 
                 GC::Ref<HTML::HTMLElement> element = verify_cast<HTML::HTMLElement>(result->as_object());
+
+                // FIXME: 3. Assert: result’s custom element state and custom element definition are initialized.
+
+                // 4. Assert: result’s namespace is the HTML namespace.
+                // Spec Note: IDL enforces that result is an HTMLElement object, which all use the HTML namespace.
+                VERIFY(element->namespace_uri() == Namespace::HTML);
 
                 // 5. If result’s attribute list is not empty, then throw a "NotSupportedError" DOMException.
                 if (element->has_attributes())

@@ -55,7 +55,7 @@ public:
         explicit PseudoElement(Type type)
             : m_type(type)
         {
-            VERIFY(type != Type::UnknownWebKit);
+            VERIFY(is_known_pseudo_element_type(type));
         }
 
         PseudoElement(Type type, String name)
@@ -67,6 +67,11 @@ public:
         bool operator==(PseudoElement const&) const = default;
 
         static Optional<PseudoElement> from_string(FlyString const&);
+
+        [[nodiscard]] static bool is_known_pseudo_element_type(Type type)
+        {
+            return to_underlying(type) < to_underlying(CSS::Selector::PseudoElement::Type::KnownPseudoElementCount);
+        }
 
         static StringView name(Selector::PseudoElement::Type pseudo_element);
 
@@ -256,6 +261,7 @@ public:
     Optional<PseudoElement> const& pseudo_element() const { return m_pseudo_element; }
     NonnullRefPtr<Selector> relative_to(SimpleSelector const&) const;
     bool contains_the_nesting_selector() const { return m_contains_the_nesting_selector; }
+    bool contains_hover_pseudo_class() const { return m_contains_hover_pseudo_class; }
     RefPtr<Selector> absolutized(SimpleSelector const& selector_for_nesting) const;
     u32 specificity() const;
     String serialize() const;
@@ -269,6 +275,7 @@ private:
     mutable Optional<u32> m_specificity;
     Optional<Selector::PseudoElement> m_pseudo_element;
     bool m_contains_the_nesting_selector { false };
+    bool m_contains_hover_pseudo_class { false };
 
     void collect_ancestor_hashes();
 

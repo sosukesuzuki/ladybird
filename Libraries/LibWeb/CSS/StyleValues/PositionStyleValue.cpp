@@ -13,10 +13,8 @@ namespace Web::CSS {
 
 bool PositionStyleValue::is_center() const
 {
-    return (edge_x()->edge() == PositionEdge::Left
-               && edge_x()->offset().is_percentage() && edge_x()->offset().percentage() == Percentage { 50 })
-        && (edge_y()->edge() == PositionEdge::Top
-            && edge_y()->offset().is_percentage() && edge_y()->offset().percentage() == Percentage { 50 });
+    return (edge_x()->offset().is_percentage() && edge_x()->offset().percentage() == Percentage { 50 })
+        && (edge_y()->offset().is_percentage() && edge_y()->offset().percentage() == Percentage { 50 });
 }
 
 CSSPixelPoint PositionStyleValue::resolved(Layout::Node const& node, CSSPixelRect const& rect) const
@@ -31,9 +29,9 @@ CSSPixelPoint PositionStyleValue::resolved(Layout::Node const& node, CSSPixelRec
     return CSSPixelPoint { rect.x() + x, rect.y() + y };
 }
 
-String PositionStyleValue::to_string() const
+String PositionStyleValue::to_string(SerializationMode mode) const
 {
-    return MUST(String::formatted("{} {}", m_properties.edge_x->to_string(), m_properties.edge_y->to_string()));
+    return MUST(String::formatted("{} {}", m_properties.edge_x->to_string(mode), m_properties.edge_y->to_string(mode)));
 }
 
 }

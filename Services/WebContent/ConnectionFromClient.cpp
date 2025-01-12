@@ -352,9 +352,9 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString const& request,
                 if (element->is_element()) {
                     auto styles = doc->style_computer().compute_style(*static_cast<Web::DOM::Element*>(element));
                     dbgln("+ Element {}", element->debug_description());
-                    for (size_t i = 0; i < Web::CSS::StyleProperties::number_of_properties; ++i) {
-                        auto property = styles.maybe_null_property(static_cast<Web::CSS::PropertyID>(i));
-                        dbgln("|  {} = {}", Web::CSS::string_from_property_id(static_cast<Web::CSS::PropertyID>(i)), property ? property->to_string() : ""_string);
+                    for (size_t i = 0; i < Web::CSS::ComputedProperties::number_of_properties; ++i) {
+                        auto property = styles->maybe_null_property(static_cast<Web::CSS::PropertyID>(i));
+                        dbgln("|  {} = {}", Web::CSS::string_from_property_id(static_cast<Web::CSS::PropertyID>(i)), property ? property->to_string(Web::CSS::CSSStyleValue::SerializationMode::Normal) : ""_string);
                     }
                     dbgln("---");
                 }
@@ -432,7 +432,7 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString const& request,
                 load_html(page_id, "<h1>Failed to find &lt;link rel=&quot;match&quot; /&gt; or &lt;link rel=&quot;mismatch&quot; /&gt; in ref test page!</h1> Make sure you added it.");
             } else {
                 auto link = maybe_link.release_value();
-                auto url = document->parse_url(link->get_attribute_value(Web::HTML::AttributeNames::href));
+                auto url = document->encoding_parse_url(link->get_attribute_value(Web::HTML::AttributeNames::href));
                 if (url.query().has_value() && !url.query()->is_empty()) {
                     load_html(page_id, "<h1>Invalid ref test link - query string must be empty</h1>");
                     return;
@@ -506,17 +506,17 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, Web::UniqueNodeID const
 
     if (node->is_element()) {
         auto& element = verify_cast<Web::DOM::Element>(*node);
-        if (!element.computed_css_values().has_value()) {
+        if (!element.computed_properties()) {
             async_did_inspect_dom_node(page_id, false, {}, {}, {}, {}, {}, {});
             return;
         }
 
-        auto serialize_json = [](Web::CSS::StyleProperties const& properties) -> ByteString {
+        auto serialize_json = [](Web::CSS::ComputedProperties const& properties) -> ByteString {
             StringBuilder builder;
 
             auto serializer = MUST(JsonObjectSerializer<>::try_create(builder));
             properties.for_each_property([&](auto property_id, auto& value) {
-                MUST(serializer.add(Web::CSS::string_from_property_id(property_id), value.to_string().to_byte_string()));
+                MUST(serializer.add(Web::CSS::string_from_property_id(property_id), value.to_string(Web::CSS::CSSStyleValue::SerializationMode::Normal).to_byte_string()));
             });
             MUST(serializer.finish());
 
@@ -533,7 +533,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, Web::UniqueNodeID const
                 for (auto const& property : element_to_check->custom_properties(pseudo_element)) {
                     if (!seen_properties.contains(property.key)) {
                         seen_properties.set(property.key);
-                        MUST(serializer.add(property.key, property.value.value->to_string()));
+                        MUST(serializer.add(property.key, property.value.value->to_string(Web::CSS::CSSStyleValue::SerializationMode::Normal)));
                     }
                 }
 
@@ -591,7 +591,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, Web::UniqueNodeID const
             return builder.to_byte_string();
         };
 
-        auto serialize_fonts_json = [](Web::CSS::StyleProperties const& properties) -> ByteString {
+        auto serialize_fonts_json = [](Web::CSS::ComputedProperties const& properties) -> ByteString {
             StringBuilder builder;
             auto serializer = MUST(JsonArraySerializer<>::try_create(builder));
 
@@ -615,7 +615,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, Web::UniqueNodeID const
                 return;
             }
 
-            auto pseudo_element_style = element.pseudo_element_computed_css_values(pseudo_element.value());
+            auto pseudo_element_style = element.pseudo_element_computed_properties(pseudo_element.value());
             ByteString computed_values = serialize_json(*pseudo_element_style);
             ByteString resolved_values = serialize_json(element.resolved_css_values(pseudo_element.value()));
             ByteString custom_properties_json = serialize_custom_properties_json(element, pseudo_element);
@@ -626,12 +626,12 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, Web::UniqueNodeID const
             return;
         }
 
-        ByteString computed_values = serialize_json(*element.computed_css_values());
+        ByteString computed_values = serialize_json(*element.computed_properties());
         ByteString resolved_values = serialize_json(element.resolved_css_values());
         ByteString custom_properties_json = serialize_custom_properties_json(element, {});
         ByteString node_box_sizing_json = serialize_node_box_sizing_json(element.layout_node());
         ByteString aria_properties_state_json = serialize_aria_properties_state_json(element);
-        ByteString fonts_json = serialize_fonts_json(*element.computed_css_values());
+        ByteString fonts_json = serialize_fonts_json(*element.computed_properties());
 
         async_did_inspect_dom_node(page_id, true, move(computed_values), move(resolved_values), move(custom_properties_json), move(node_box_sizing_json), move(aria_properties_state_json), move(fonts_json));
         return;

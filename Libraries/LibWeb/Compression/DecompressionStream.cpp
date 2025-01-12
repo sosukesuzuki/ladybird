@@ -56,7 +56,7 @@ WebIDL::ExceptionOr<GC::Ref<DecompressionStream>> DecompressionStream::construct
         auto& vm = realm.vm();
 
         if (auto result = stream->decompress_and_enqueue_chunk(chunk); result.is_error()) {
-            auto throw_completion = Bindings::dom_exception_to_throw_completion(vm, result.exception());
+            auto throw_completion = Bindings::exception_to_throw_completion(vm, result.exception());
             return WebIDL::create_rejected_promise(realm, *throw_completion.release_value());
         }
 
@@ -69,7 +69,7 @@ WebIDL::ExceptionOr<GC::Ref<DecompressionStream>> DecompressionStream::construct
         auto& vm = realm.vm();
 
         if (auto result = stream->decompress_flush_and_enqueue(); result.is_error()) {
-            auto throw_completion = Bindings::dom_exception_to_throw_completion(vm, result.exception());
+            auto throw_completion = Bindings::exception_to_throw_completion(vm, result.exception());
             return WebIDL::create_rejected_promise(realm, *throw_completion.release_value());
         }
 
@@ -77,7 +77,7 @@ WebIDL::ExceptionOr<GC::Ref<DecompressionStream>> DecompressionStream::construct
     });
 
     // 6. Set up this's transform with transformAlgorithm set to transformAlgorithm and flushAlgorithm set to flushAlgorithm.
-    Streams::transform_stream_set_up(stream->m_transform, transform_algorithm, flush_algorithm);
+    stream->m_transform->set_up(transform_algorithm, flush_algorithm);
 
     return stream;
 }
@@ -133,7 +133,7 @@ WebIDL::ExceptionOr<void> DecompressionStream::decompress_and_enqueue_chunk(JS::
     auto array = JS::Uint8Array::create(realm, array_buffer->byte_length(), *array_buffer);
 
     // 5. For each Uint8Array array, enqueue array in ds's transform.
-    TRY(Streams::transform_stream_default_controller_enqueue(*m_transform->controller(), array));
+    m_transform->enqueue(array);
     return {};
 }
 
@@ -159,7 +159,7 @@ WebIDL::ExceptionOr<void> DecompressionStream::decompress_flush_and_enqueue()
     auto array = JS::Uint8Array::create(realm, array_buffer->byte_length(), *array_buffer);
 
     // 5. For each Uint8Array array, enqueue array in ds's transform.
-    TRY(Streams::transform_stream_default_controller_enqueue(*m_transform->controller(), array));
+    m_transform->enqueue(array);
     return {};
 }
 

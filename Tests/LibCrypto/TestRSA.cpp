@@ -21,13 +21,14 @@ TEST_CASE(test_RSA_raw_encrypt)
 {
     ByteBuffer data { "hellohellohellohellohellohellohellohellohellohellohellohello123-"_b };
     u8 result[] { 0x6f, 0x7b, 0xe2, 0xd3, 0x95, 0xf8, 0x8d, 0x87, 0x6d, 0x10, 0x5e, 0xc3, 0xcd, 0xf7, 0xbb, 0xa6, 0x62, 0x8e, 0x45, 0xa0, 0xf1, 0xe5, 0x0f, 0xdf, 0x69, 0xcb, 0xb6, 0xd5, 0x42, 0x06, 0x7d, 0x72, 0xa9, 0x5e, 0xae, 0xbf, 0xbf, 0x0f, 0xe0, 0xeb, 0x31, 0x31, 0xca, 0x8a, 0x81, 0x1e, 0xb9, 0xec, 0x6d, 0xcc, 0xb8, 0xa4, 0xac, 0xa3, 0x31, 0x05, 0xa9, 0xac, 0xc9, 0xd3, 0xe6, 0x2a, 0x18, 0xfe };
-    Crypto::PK::RSA rsa(
+    Crypto::PK::RSA rsa(Crypto::PK::RSAPublicKey<> {
         "8126832723025844890518845777858816391166654950553329127845898924164623511718747856014227624997335860970996746552094406240834082304784428582653994490504519"_bigint,
-        "4234603516465654167360850580101327813936403862038934287300450163438938741499875303761385527882335478349599685406941909381269804396099893549838642251053393"_bigint,
-        "65537"_bigint);
-    u8 buffer[rsa.output_size()];
-    auto buf = Bytes { buffer, sizeof(buffer) };
-    rsa.encrypt(data, buf);
+        "65537"_bigint,
+    });
+    ByteBuffer buffer = {};
+    buffer.resize(rsa.output_size());
+    auto buf = buffer.bytes();
+    TRY_OR_FAIL(rsa.encrypt(data, buf));
     EXPECT(memcmp(result, buf.data(), buf.size()) == 0);
 }
 
@@ -35,14 +36,14 @@ TEST_CASE(test_RSA_raw_encrypt)
 TEST_CASE(test_RSA_PKCS_1_encrypt)
 {
     ByteBuffer data { "hellohellohellohellohellohellohellohellohello123-"_b };
-    Crypto::PK::RSA_PKCS1_EME rsa(
-        "8126832723025844890518845777858816391166654950553329127845898924164623511718747856014227624997335860970996746552094406240834082304784428582653994490504519"_bigint,
-        "4234603516465654167360850580101327813936403862038934287300450163438938741499875303761385527882335478349599685406941909381269804396099893549838642251053393"_bigint,
-        "65537"_bigint);
-    u8 buffer[rsa.output_size()];
-    auto buf = Bytes { buffer, sizeof(buffer) };
-    rsa.encrypt(data, buf);
-    rsa.decrypt(buf, buf);
+
+    auto keypair = TRY_OR_FAIL(Crypto::PK::RSA::generate_key_pair(1024));
+    Crypto::PK::RSA_PKCS1_EME rsa(keypair);
+    ByteBuffer buffer = {};
+    buffer.resize(rsa.output_size());
+    auto buf = buffer.bytes();
+    TRY_OR_FAIL(rsa.encrypt(data, buf));
+    TRY_OR_FAIL(rsa.decrypt(buf, buf));
 
     EXPECT(memcmp(buf.data(), "hellohellohellohellohellohellohellohellohello123-", 49) == 0);
 }
@@ -137,37 +138,41 @@ c8yGzl89pYST
 
     EXPECT_EQ(keypem, StringView(priv_pem));
 
-    u8 enc_buffer[rsa_from_pair.output_size()];
-    u8 dec_buffer[rsa_from_pair.output_size()];
+    ByteBuffer enc_buffer = {};
+    enc_buffer.resize(rsa_from_pair.output_size());
 
-    auto enc = Bytes { enc_buffer, rsa_from_pair.output_size() };
-    auto dec = Bytes { dec_buffer, rsa_from_pair.output_size() };
+    ByteBuffer dec_buffer = {};
+    dec_buffer.resize(rsa_from_pair.output_size());
+
+    auto enc = enc_buffer.bytes();
+    auto dec = dec_buffer.bytes();
 
     dec.overwrite(0, "WellHelloFriends", 16);
 
-    rsa_from_pair.encrypt(dec, enc);
-    rsa_from_pem.decrypt(enc, dec);
+    TRY_OR_FAIL(rsa_from_pair.encrypt(dec, enc));
+    TRY_OR_FAIL(rsa_from_pem.decrypt(enc, dec));
 
     EXPECT_EQ(memcmp(dec.data(), "WellHelloFriends", 16), 0);
 }
 
 TEST_CASE(test_RSA_encrypt_decrypt)
 {
-    Crypto::PK::RSA rsa(
-        "9527497237087650398000977129550904920919162360737979403539302312977329868395261515707123424679295515888026193056908173564681660256268221509339074678416049"_bigint,
-        "39542231845947188736992321577701849924317746648774438832456325878966594812143638244746284968851807975097653255909707366086606867657273809465195392910913"_bigint,
-        "65537"_bigint);
+    auto keypair = TRY_OR_FAIL(Crypto::PK::RSA::generate_key_pair(1024));
+    Crypto::PK::RSA rsa(keypair);
 
-    u8 enc_buffer[rsa.output_size()];
-    u8 dec_buffer[rsa.output_size()];
+    ByteBuffer enc_buffer = {};
+    enc_buffer.resize(rsa.output_size());
 
-    auto enc = Bytes { enc_buffer, rsa.output_size() };
-    auto dec = Bytes { dec_buffer, rsa.output_size() };
+    ByteBuffer dec_buffer = {};
+    dec_buffer.resize(rsa.output_size());
+
+    auto enc = enc_buffer.bytes();
+    auto dec = dec_buffer.bytes();
 
     enc.overwrite(0, "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64);
 
-    rsa.encrypt(enc, dec);
-    rsa.decrypt(dec, enc);
+    TRY_OR_FAIL(rsa.encrypt(enc, dec));
+    TRY_OR_FAIL(rsa.decrypt(dec, enc));
 
     EXPECT(memcmp(enc.data(), "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64) == 0);
 }

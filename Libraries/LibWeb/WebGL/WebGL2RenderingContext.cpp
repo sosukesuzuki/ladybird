@@ -69,6 +69,7 @@ void WebGL2RenderingContext::initialize(JS::Realm& realm)
 void WebGL2RenderingContext::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
+    WebGL2RenderingContextImpl::visit_edges(visitor);
     visitor.visit(m_canvas_element);
 }
 
@@ -128,7 +129,10 @@ Optional<WebGLContextAttributes> WebGL2RenderingContext::get_context_attributes(
 
 void WebGL2RenderingContext::set_size(Gfx::IntSize const& size)
 {
-    context().set_size(size);
+    Gfx::IntSize final_size;
+    final_size.set_width(max(size.width(), 1));
+    final_size.set_height(max(size.height(), 1));
+    context().set_size(final_size);
 }
 
 void WebGL2RenderingContext::reset_to_default_state()
@@ -145,14 +149,26 @@ void WebGL2RenderingContext::allocate_painting_surface_if_needed()
     context().allocate_painting_surface_if_needed();
 }
 
-Optional<Vector<String>> WebGL2RenderingContext::get_supported_extensions() const
+Optional<Vector<String>> WebGL2RenderingContext::get_supported_extensions()
 {
-    return {};
+    return context().get_supported_extensions();
 }
 
 JS::Object* WebGL2RenderingContext::get_extension(String const&)
 {
     return nullptr;
+}
+
+WebIDL::Long WebGL2RenderingContext::drawing_buffer_width() const
+{
+    auto size = canvas_for_binding()->bitmap_size_for_canvas();
+    return size.width();
+}
+
+WebIDL::Long WebGL2RenderingContext::drawing_buffer_height() const
+{
+    auto size = canvas_for_binding()->bitmap_size_for_canvas();
+    return size.height();
 }
 
 }

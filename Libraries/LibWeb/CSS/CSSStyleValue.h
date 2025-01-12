@@ -20,6 +20,7 @@
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <LibGfx/Color.h>
+#include <LibGfx/Font/FontVariant.h>
 #include <LibURL/URL.h>
 #include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/Keyword.h>
@@ -93,7 +94,9 @@ public:
         BackgroundSize,
         BasicShape,
         BorderRadius,
+        Calculated,
         Color,
+        ColorScheme,
         ConicGradient,
         Content,
         Counter,
@@ -104,6 +107,7 @@ public:
         Edge,
         FilterValueList,
         Flex,
+        FontVariant,
         Frequency,
         GridAutoFlow,
         GridTemplateArea,
@@ -114,7 +118,6 @@ public:
         Keyword,
         Length,
         LinearGradient,
-        Math,
         MathDepth,
         Number,
         OpenTypeTagged,
@@ -168,9 +171,17 @@ public:
     BorderRadiusStyleValue const& as_border_radius() const;
     BorderRadiusStyleValue& as_border_radius() { return const_cast<BorderRadiusStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_border_radius()); }
 
+    bool is_calculated() const { return type() == Type::Calculated; }
+    CalculatedStyleValue const& as_calculated() const;
+    CalculatedStyleValue& as_calculated() { return const_cast<CalculatedStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_calculated()); }
+
     bool is_color() const { return type() == Type::Color; }
     CSSColorValue const& as_color() const;
     CSSColorValue& as_color() { return const_cast<CSSColorValue&>(const_cast<CSSStyleValue const&>(*this).as_color()); }
+
+    bool is_color_scheme() const { return type() == Type::ColorScheme; }
+    ColorSchemeStyleValue const& as_color_scheme() const;
+    ColorSchemeStyleValue& as_color_scheme() { return const_cast<ColorSchemeStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_color_scheme()); }
 
     bool is_conic_gradient() const { return type() == Type::ConicGradient; }
     ConicGradientStyleValue const& as_conic_gradient() const;
@@ -251,10 +262,6 @@ public:
     bool is_linear_gradient() const { return type() == Type::LinearGradient; }
     LinearGradientStyleValue const& as_linear_gradient() const;
     LinearGradientStyleValue& as_linear_gradient() { return const_cast<LinearGradientStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_linear_gradient()); }
-
-    bool is_math() const { return type() == Type::Math; }
-    CSSMathValue const& as_math() const;
-    CSSMathValue& as_math() { return const_cast<CSSMathValue&>(const_cast<CSSStyleValue const&>(*this).as_math()); }
 
     bool is_math_depth() const { return type() == Type::MathDepth; }
     MathDepthStyleValue const& as_math_depth() const;
@@ -360,11 +367,23 @@ public:
 
     virtual Color to_color(Optional<Layout::NodeWithStyle const&>) const { return {}; }
     Keyword to_keyword() const;
-    virtual String to_string() const = 0;
+
+    enum class SerializationMode {
+        Normal,
+        ResolvedValue,
+    };
+    virtual String to_string(SerializationMode) const = 0;
 
     [[nodiscard]] int to_font_weight() const;
     [[nodiscard]] int to_font_slope() const;
     [[nodiscard]] int to_font_width() const;
+    [[nodiscard]] Optional<Gfx::FontVariantAlternates> to_font_variant_alternates() const;
+    [[nodiscard]] Optional<FontVariantCaps> to_font_variant_caps() const;
+    [[nodiscard]] Optional<Gfx::FontVariantEastAsian> to_font_variant_east_asian() const;
+    [[nodiscard]] Optional<FontVariantEmoji> to_font_variant_emoji() const;
+    [[nodiscard]] Optional<Gfx::FontVariantLigatures> to_font_variant_ligatures() const;
+    [[nodiscard]] Optional<Gfx::FontVariantNumeric> to_font_variant_numeric() const;
+    [[nodiscard]] Optional<FontVariantPosition> to_font_variant_position() const;
 
     virtual bool equals(CSSStyleValue const& other) const = 0;
 
@@ -399,6 +418,6 @@ template<>
 struct AK::Formatter<Web::CSS::CSSStyleValue> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::CSSStyleValue const& style_value)
     {
-        return Formatter<StringView>::format(builder, style_value.to_string());
+        return Formatter<StringView>::format(builder, style_value.to_string(Web::CSS::CSSStyleValue::SerializationMode::Normal));
     }
 };

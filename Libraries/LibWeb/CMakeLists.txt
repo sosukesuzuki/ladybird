@@ -33,6 +33,7 @@ set(SOURCES
     Bindings/SyntheticHostDefined.cpp
     Clipboard/Clipboard.cpp
     Clipboard/ClipboardEvent.cpp
+    Clipboard/ClipboardItem.cpp
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
     Crypto/Crypto.cpp
@@ -69,8 +70,11 @@ set(SOURCES
     CSS/CSSStyleValue.cpp
     CSS/CSSSupportsRule.cpp
     CSS/CSSTransition.cpp
+    CSS/CascadedProperties.cpp
+    CSS/ComputedProperties.cpp
     CSS/Display.cpp
     CSS/EdgeRect.cpp
+    CSS/Fetch.cpp
     CSS/FontFace.cpp
     CSS/FontFaceSet.cpp
     CSS/Flex.cpp
@@ -112,7 +116,6 @@ set(SOURCES
     CSS/Sizing.cpp
     CSS/StyleComputer.cpp
     CSS/StyleInvalidation.cpp
-    CSS/StyleProperties.cpp
     CSS/StyleProperty.cpp
     CSS/StyleSheet.cpp
     CSS/StyleSheetIdentifier.cpp
@@ -122,6 +125,8 @@ set(SOURCES
     CSS/StyleValues/BackgroundSizeStyleValue.cpp
     CSS/StyleValues/BasicShapeStyleValue.cpp
     CSS/StyleValues/BorderRadiusStyleValue.cpp
+    CSS/StyleValues/CalculatedStyleValue.cpp
+    CSS/StyleValues/ColorSchemeStyleValue.cpp
     CSS/StyleValues/ConicGradientStyleValue.cpp
     CSS/StyleValues/ContentStyleValue.cpp
     CSS/StyleValues/CounterDefinitionsStyleValue.cpp
@@ -133,7 +138,7 @@ set(SOURCES
     CSS/StyleValues/CSSKeywordValue.cpp
     CSS/StyleValues/CSSLabLike.cpp
     CSS/StyleValues/CSSLCHLike.cpp
-    CSS/StyleValues/CSSMathValue.cpp
+    CSS/StyleValues/CSSLightDark.cpp
     CSS/StyleValues/CSSRGB.cpp
     CSS/StyleValues/DisplayStyleValue.cpp
     CSS/StyleValues/EasingStyleValue.cpp
@@ -167,6 +172,7 @@ set(SOURCES
     CSS/SystemColor.cpp
     CSS/Time.cpp
     CSS/Transformation.cpp
+    CSS/TransitionEvent.cpp
     CSS/VisualViewport.cpp
     Cookie/Cookie.cpp
     Cookie/ParsedCookie.cpp
@@ -441,6 +447,7 @@ set(SOURCES
     HTML/Numbers.cpp
     HTML/PageTransitionEvent.cpp
     HTML/PolicyContainers.cpp
+    HTML/PopoverInvokerElement.cpp
     HTML/PopStateEvent.cpp
     HTML/Parser/Entities.cpp
     HTML/Parser/HTMLEncodingDetection.cpp
@@ -455,6 +462,7 @@ set(SOURCES
     HTML/PotentialCORSRequest.cpp
     HTML/PromiseRejectionEvent.cpp
     HTML/RadioNodeList.cpp
+    HTML/Scripting/Agent.cpp
     HTML/Scripting/ClassicScript.cpp
     HTML/Scripting/Environments.cpp
     HTML/Scripting/EnvironmentSettingsSnapshot.cpp
@@ -478,6 +486,7 @@ set(SOURCES
     HTML/SharedResourceRequest.cpp
     HTML/SourceSet.cpp
     HTML/Storage.cpp
+    HTML/StorageEvent.cpp
     HTML/StructuredSerialize.cpp
     HTML/SubmitEvent.cpp
     HTML/SyntaxHighlighter/SyntaxHighlighter.cpp
@@ -684,8 +693,12 @@ set(SOURCES
     ServiceWorker/ServiceWorkerRegistration.cpp
     SRI/SRI.cpp
     StorageAPI/NavigatorStorage.cpp
+    StorageAPI/StorageBottle.cpp
+    StorageAPI/StorageEndpoint.cpp
     StorageAPI/StorageKey.cpp
     StorageAPI/StorageManager.cpp
+    StorageAPI/StorageShed.cpp
+    StorageAPI/StorageShelf.cpp
     Streams/AbstractOperations.cpp
     Streams/ByteLengthQueuingStrategy.cpp
     Streams/CountQueuingStrategy.cpp
@@ -766,6 +779,7 @@ set(SOURCES
     UIEvents/WheelEvent.cpp
     UserTiming/PerformanceMark.cpp
     UserTiming/PerformanceMeasure.cpp
+    WebAssembly/Global.cpp
     WebAssembly/Instance.cpp
     WebAssembly/Memory.cpp
     WebAssembly/Module.cpp
@@ -782,10 +796,14 @@ set(SOURCES
     WebAudio/BaseAudioContext.cpp
     WebAudio/BiquadFilterNode.cpp
     WebAudio/ChannelMergerNode.cpp
+    WebAudio/ChannelSplitterNode.cpp
+    WebAudio/ConstantSourceNode.cpp
+    WebAudio/DelayNode.cpp
     WebAudio/DynamicsCompressorNode.cpp
     WebAudio/GainNode.cpp
     WebAudio/OfflineAudioContext.cpp
     WebAudio/OscillatorNode.cpp
+    WebAudio/PannerNode.cpp
     WebAudio/PeriodicWave.cpp
     WebDriver/Actions.cpp
     WebDriver/Capabilities.cpp
@@ -802,6 +820,7 @@ set(SOURCES
     WebDriver/Response.cpp
     WebDriver/Screenshot.cpp
     WebDriver/TimeoutsConfiguration.cpp
+    WebGL/ANGLEInstancedArrays.cpp
     WebGL/EventNames.cpp
     WebGL/OpenGLContext.cpp
     WebGL/WebGL2RenderingContext.cpp

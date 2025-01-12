@@ -12,6 +12,7 @@
 #include <LibWeb/HTML/HTMLCanvasElement.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/Painting/Paintable.h>
+#include <LibWeb/WebGL/ANGLEInstancedArrays.h>
 #include <LibWeb/WebGL/EventNames.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
 #include <LibWeb/WebGL/WebGLContextEvent.h>
@@ -85,6 +86,7 @@ void WebGLRenderingContext::initialize(JS::Realm& realm)
 void WebGLRenderingContext::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
+    WebGLRenderingContextImpl::visit_edges(visitor);
     visitor.visit(m_canvas_element);
 }
 
@@ -144,7 +146,10 @@ Optional<WebGLContextAttributes> WebGLRenderingContext::get_context_attributes()
 
 void WebGLRenderingContext::set_size(Gfx::IntSize const& size)
 {
-    context().set_size(size);
+    Gfx::IntSize final_size;
+    final_size.set_width(max(size.width(), 1));
+    final_size.set_height(max(size.height(), 1));
+    context().set_size(final_size);
 }
 
 void WebGLRenderingContext::reset_to_default_state()
@@ -161,14 +166,29 @@ void WebGLRenderingContext::allocate_painting_surface_if_needed()
     context().allocate_painting_surface_if_needed();
 }
 
-Optional<Vector<String>> WebGLRenderingContext::get_supported_extensions() const
+Optional<Vector<String>> WebGLRenderingContext::get_supported_extensions()
 {
-    return {};
+    return context().get_supported_extensions();
 }
 
-JS::Object* WebGLRenderingContext::get_extension(String const&)
+JS::Object* WebGLRenderingContext::get_extension(String const& name)
 {
+    if (name == "ANGLE_instanced_arrays"sv) {
+        return MUST(ANGLEInstancedArrays::create(realm()));
+    }
     return nullptr;
+}
+
+WebIDL::Long WebGLRenderingContext::drawing_buffer_width() const
+{
+    auto size = canvas_for_binding()->bitmap_size_for_canvas();
+    return size.width();
+}
+
+WebIDL::Long WebGLRenderingContext::drawing_buffer_height() const
+{
+    auto size = canvas_for_binding()->bitmap_size_for_canvas();
+    return size.height();
 }
 
 }

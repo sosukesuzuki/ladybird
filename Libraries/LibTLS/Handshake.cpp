@@ -11,13 +11,14 @@
 
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
+#include <LibCrypto/SecureRandom.h>
 #include <LibTLS/TLSv12.h>
 
 namespace TLS {
 
 ByteBuffer TLSv12::build_hello()
 {
-    fill_with_random(m_context.local_random);
+    ::Crypto::fill_with_secure_random(m_context.local_random);
 
     auto packet_version = (u16)m_context.options.version;
     auto version = (u16)m_context.options.version;
@@ -257,8 +258,6 @@ ssize_t TLSv12::handle_handshake_payload(ReadonlyBytes vbuffer)
     auto original_length = buffer_length;
     while (buffer_length >= 4 && !m_context.critical_error) {
         ssize_t payload_res = 0;
-        if (buffer_length < 1)
-            return (i8)Error::NeedMoreData;
         auto type = static_cast<HandshakeType>(buffer[0]);
         auto write_packets { WritePacketStage::Initial };
         size_t payload_size = buffer[1] * 0x10000 + buffer[2] * 0x100 + buffer[3] + 3;

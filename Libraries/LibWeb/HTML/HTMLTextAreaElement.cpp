@@ -10,7 +10,7 @@
 #include <AK/Utf16View.h>
 #include <LibWeb/Bindings/HTMLTextAreaElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -41,7 +41,7 @@ HTMLTextAreaElement::HTMLTextAreaElement(DOM::Document& document, DOM::Qualified
 
 HTMLTextAreaElement::~HTMLTextAreaElement() = default;
 
-void HTMLTextAreaElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLTextAreaElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())
@@ -136,9 +136,11 @@ void HTMLTextAreaElement::clear_algorithm()
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#the-textarea-element:concept-node-clone-ext
-WebIDL::ExceptionOr<void> HTMLTextAreaElement::cloned(DOM::Node& copy, bool)
+WebIDL::ExceptionOr<void> HTMLTextAreaElement::cloned(DOM::Node& copy, bool subtree) const
 {
-    // The cloning steps for textarea elements must propagate the raw value and dirty value flag from the node being cloned to the copy.
+    TRY(Base::cloned(copy, subtree));
+
+    // The cloning steps for textarea elements given node, copy, and subtree are to propagate the raw value and dirty value flag from node to copy.
     auto& textarea_copy = verify_cast<HTMLTextAreaElement>(copy);
     textarea_copy.m_raw_value = m_raw_value;
     textarea_copy.m_dirty_value = m_dirty_value;
@@ -328,22 +330,22 @@ WebIDL::ExceptionOr<void> HTMLTextAreaElement::set_rows(WebIDL::UnsignedLong row
 
 WebIDL::UnsignedLong HTMLTextAreaElement::selection_start_binding() const
 {
-    return selection_start().value();
+    return FormAssociatedTextControlElement::selection_start_binding().value();
 }
 
 WebIDL::ExceptionOr<void> HTMLTextAreaElement::set_selection_start_binding(WebIDL::UnsignedLong const& value)
 {
-    return set_selection_start(value);
+    return FormAssociatedTextControlElement::set_selection_start_binding(value);
 }
 
 WebIDL::UnsignedLong HTMLTextAreaElement::selection_end_binding() const
 {
-    return selection_end().value();
+    return FormAssociatedTextControlElement::selection_end_binding().value();
 }
 
 WebIDL::ExceptionOr<void> HTMLTextAreaElement::set_selection_end_binding(WebIDL::UnsignedLong const& value)
 {
-    return set_selection_end(value);
+    return FormAssociatedTextControlElement::set_selection_end_binding(value);
 }
 
 String HTMLTextAreaElement::selection_direction_binding() const
@@ -394,10 +396,7 @@ void HTMLTextAreaElement::create_shadow_tree_if_needed()
 void HTMLTextAreaElement::handle_readonly_attribute(Optional<String> const& maybe_value)
 {
     // The readonly attribute is a boolean attribute that controls whether or not the user can edit the form control. When specified, the element is not mutable.
-    m_is_mutable = !maybe_value.has_value();
-
-    if (m_text_node)
-        m_text_node->set_always_editable(m_is_mutable);
+    set_is_mutable(!maybe_value.has_value());
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-textarea-maxlength
@@ -442,7 +441,7 @@ void HTMLTextAreaElement::children_changed()
     }
 }
 
-void HTMLTextAreaElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value)
+void HTMLTextAreaElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value, Optional<FlyString> const&)
 {
     if (name == HTML::AttributeNames::placeholder) {
         if (m_placeholder_text_node)

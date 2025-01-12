@@ -7,7 +7,7 @@
 
 #include <LibWeb/Bindings/HTMLTableSectionElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -64,7 +64,7 @@ WebIDL::ExceptionOr<GC::Ref<HTMLTableRowElement>> HTMLTableSectionElement::inser
     if (index < -1 || index > rows_collection_size)
         return WebIDL::IndexSizeError::create(realm(), "Index is negative or greater than the number of rows"_string);
 
-    // 2. Let table row be the result of creating an element given this element's node document, tr, and the HTML namespace.
+    // 2. Let table row be the result of creating an element given this element's node document, "tr", and the HTML namespace.
     auto& table_row = static_cast<HTMLTableRowElement&>(*TRY(DOM::create_element(document(), TagNames::tr, Namespace::HTML)));
 
     // 3. If index is −1 or equal to the number of items in the rows collection, then append table row to this element.
@@ -100,18 +100,28 @@ WebIDL::ExceptionOr<void> HTMLTableSectionElement::delete_row(WebIDL::Long index
     return {};
 }
 
-void HTMLTableSectionElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLTableSectionElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::background,
+        HTML::AttributeNames::bgcolor);
+}
+
+void HTMLTableSectionElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:encoding-parsing-and-serializing-a-url
         if (name == HTML::AttributeNames::background) {
-            if (auto parsed_value = document().parse_url(value); parsed_value.is_valid())
-                style.set_property(CSS::PropertyID::BackgroundImage, CSS::ImageStyleValue::create(parsed_value));
+            if (auto parsed_value = document().encoding_parse_url(value); parsed_value.is_valid())
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundImage, CSS::ImageStyleValue::create(parsed_value));
         }
         // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:rules-for-parsing-a-legacy-colour-value
         else if (name == HTML::AttributeNames::bgcolor) {
             if (auto color = parse_legacy_color_value(value); color.has_value())
-                style.set_property(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
         }
     });
 }

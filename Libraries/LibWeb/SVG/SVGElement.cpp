@@ -8,11 +8,13 @@
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/SVGElementPrototype.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/SVG/SVGDescElement.h>
 #include <LibWeb/SVG/SVGElement.h>
 #include <LibWeb/SVG/SVGSVGElement.h>
+#include <LibWeb/SVG/SVGTitleElement.h>
 #include <LibWeb/SVG/SVGUseElement.h>
 
 namespace Web::SVG {
@@ -26,6 +28,44 @@ void SVGElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
     WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGElement);
+}
+
+bool SVGElement::should_include_in_accessibility_tree() const
+{
+    bool has_title_or_desc = false;
+    auto role = role_from_role_attribute_value();
+    for_each_child_of_type<SVGElement>([&has_title_or_desc](auto& child) {
+        if ((is<SVGTitleElement>(child) || is<SVGDescElement>(child)) && !child.text_content()->trim_ascii_whitespace().value().is_empty()) {
+            has_title_or_desc = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+    // https://w3c.github.io/svg-aam/#include_elements
+    // TODO: Add support for the SVG tabindex attribute, and include a check for it here.
+    return has_title_or_desc
+        || (aria_label().has_value() && !aria_label().value().trim_ascii_whitespace().value().is_empty())
+        || (aria_labelled_by().has_value() && !aria_labelled_by().value().trim_ascii_whitespace().value().is_empty())
+        || (aria_described_by().has_value() && !aria_described_by().value().trim_ascii_whitespace().value().is_empty())
+        || (role.has_value() && ARIA::is_abstract_role(role.value()) && role != ARIA::Role::none && role != ARIA::Role::presentation);
+}
+
+Optional<ARIA::Role> SVGElement::default_role() const
+{
+    // https://w3c.github.io/svg-aam/#mapping_role_table
+    if (local_name() == TagNames::a && (has_attribute(SVG::AttributeNames::href) || has_attribute(AttributeNames::xlink_href)))
+        return ARIA::Role::link;
+    if (local_name().is_one_of(TagNames::foreignObject, TagNames::g)
+        && should_include_in_accessibility_tree())
+        return ARIA::Role::group;
+    if (local_name() == TagNames::image && should_include_in_accessibility_tree())
+        return ARIA::Role::image;
+    if (local_name() == TagNames::circle && should_include_in_accessibility_tree())
+        return ARIA::Role::graphicssymbol;
+    if (local_name().is_one_of(TagNames::ellipse, TagNames::path, TagNames::polygon, TagNames::polyline)
+        && should_include_in_accessibility_tree())
+        return ARIA::Role::graphicssymbol;
+    return ARIA::Role::generic;
 }
 
 void SVGElement::visit_edges(Cell::Visitor& visitor)
@@ -43,7 +83,7 @@ void SVGElement::attribute_changed(FlyString const& local_name, Optional<String>
     update_use_elements_that_reference_this();
 }
 
-WebIDL::ExceptionOr<void> SVGElement::cloned(DOM::Node& copy, bool clone_children)
+WebIDL::ExceptionOr<void> SVGElement::cloned(DOM::Node& copy, bool clone_children) const
 {
     TRY(Base::cloned(copy, clone_children));
     TRY(HTMLOrSVGElement::cloned(copy, clone_children));
@@ -130,8 +170,8 @@ GC::Ref<SVGAnimatedLength> SVGElement::svg_animated_length_for_property(CSS::Pro
 {
     // FIXME: Create a proper animated value when animations are supported.
     auto make_length = [&] {
-        if (auto const style = computed_css_values(); style.has_value()) {
-            if (auto length = style->length_percentage(property); length.has_value())
+        if (auto const computed_properties = this->computed_properties()) {
+            if (auto length = computed_properties->length_percentage(property); length.has_value())
                 return SVGLength::from_length_percentage(realm(), *length);
         }
         return SVGLength::create(realm(), 0, 0.0f);

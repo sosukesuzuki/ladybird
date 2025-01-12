@@ -49,11 +49,12 @@ void DisplayListRecorder::fill_rect(Gfx::IntRect const& rect, Color color)
 void DisplayListRecorder::fill_path(FillPathUsingColorParams params)
 {
     auto aa_translation = params.translation.value_or(Gfx::FloatPoint {});
-    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation).to_type<int>();
-    if (path_bounding_rect.is_empty())
+    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation);
+    auto path_bounding_int_rect = enclosing_int_rect(path_bounding_rect);
+    if (path_bounding_int_rect.is_empty())
         return;
     append(FillPathUsingColor {
-        .path_bounding_rect = path_bounding_rect,
+        .path_bounding_rect = path_bounding_int_rect,
         .path = move(params.path),
         .color = params.color,
         .winding_rule = params.winding_rule,
@@ -64,11 +65,12 @@ void DisplayListRecorder::fill_path(FillPathUsingColorParams params)
 void DisplayListRecorder::fill_path(FillPathUsingPaintStyleParams params)
 {
     auto aa_translation = params.translation.value_or(Gfx::FloatPoint {});
-    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation).to_type<int>();
-    if (path_bounding_rect.is_empty())
+    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation);
+    auto path_bounding_int_rect = enclosing_int_rect(path_bounding_rect);
+    if (path_bounding_int_rect.is_empty())
         return;
     append(FillPathUsingPaintStyle {
-        .path_bounding_rect = path_bounding_rect,
+        .path_bounding_rect = path_bounding_int_rect,
         .path = move(params.path),
         .paint_style = params.paint_style,
         .winding_rule = params.winding_rule,
@@ -80,10 +82,11 @@ void DisplayListRecorder::fill_path(FillPathUsingPaintStyleParams params)
 void DisplayListRecorder::stroke_path(StrokePathUsingColorParams params)
 {
     auto aa_translation = params.translation.value_or(Gfx::FloatPoint {});
-    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation).to_type<int>();
+    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation);
     // Increase path bounding box by `thickness` to account for stroke.
     path_bounding_rect.inflate(params.thickness, params.thickness);
-    if (path_bounding_rect.is_empty())
+    auto path_bounding_int_rect = enclosing_int_rect(path_bounding_rect);
+    if (path_bounding_int_rect.is_empty())
         return;
     append(StrokePathUsingColor {
         .cap_style = params.cap_style,
@@ -91,7 +94,7 @@ void DisplayListRecorder::stroke_path(StrokePathUsingColorParams params)
         .miter_limit = params.miter_limit,
         .dash_array = move(params.dash_array),
         .dash_offset = params.dash_offset,
-        .path_bounding_rect = path_bounding_rect,
+        .path_bounding_rect = path_bounding_int_rect,
         .path = move(params.path),
         .color = params.color,
         .thickness = params.thickness,
@@ -102,10 +105,11 @@ void DisplayListRecorder::stroke_path(StrokePathUsingColorParams params)
 void DisplayListRecorder::stroke_path(StrokePathUsingPaintStyleParams params)
 {
     auto aa_translation = params.translation.value_or(Gfx::FloatPoint {});
-    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation).to_type<int>();
+    auto path_bounding_rect = params.path.bounding_box().translated(aa_translation);
     // Increase path bounding box by `thickness` to account for stroke.
     path_bounding_rect.inflate(params.thickness, params.thickness);
-    if (path_bounding_rect.is_empty())
+    auto path_bounding_int_rect = enclosing_int_rect(path_bounding_rect);
+    if (path_bounding_int_rect.is_empty())
         return;
     append(StrokePathUsingPaintStyle {
         .cap_style = params.cap_style,
@@ -113,7 +117,7 @@ void DisplayListRecorder::stroke_path(StrokePathUsingPaintStyleParams params)
         .miter_limit = params.miter_limit,
         .dash_array = move(params.dash_array),
         .dash_offset = params.dash_offset,
-        .path_bounding_rect = path_bounding_rect,
+        .path_bounding_rect = path_bounding_int_rect,
         .path = move(params.path),
         .paint_style = params.paint_style,
         .thickness = params.thickness,
@@ -230,7 +234,7 @@ void DisplayListRecorder::draw_text(Gfx::IntRect const& rect, String raw_text, G
     if (rect.is_empty())
         return;
 
-    auto glyph_run = Gfx::shape_text({}, 0, raw_text.code_points(), font, Gfx::GlyphRun::TextType::Ltr);
+    auto glyph_run = Gfx::shape_text({}, 0, raw_text.code_points(), font, Gfx::GlyphRun::TextType::Ltr, {});
     float baseline_x = 0;
     if (alignment == Gfx::TextAlignment::CenterLeft) {
         baseline_x = rect.x();
@@ -244,10 +248,10 @@ void DisplayListRecorder::draw_text(Gfx::IntRect const& rect, String raw_text, G
     }
     auto metrics = font.pixel_metrics();
     float baseline_y = static_cast<float>(rect.y()) + metrics.ascent + (static_cast<float>(rect.height()) - (metrics.ascent + metrics.descent)) / 2.0f;
-    draw_text_run(Gfx::IntPoint(roundf(baseline_x), roundf(baseline_y)), *glyph_run, color, rect, 1.0, Orientation::Horizontal);
+    draw_text_run({ baseline_x, baseline_y }, *glyph_run, color, rect, 1.0, Orientation::Horizontal);
 }
 
-void DisplayListRecorder::draw_text_run(Gfx::IntPoint baseline_start, Gfx::GlyphRun const& glyph_run, Color color, Gfx::IntRect const& rect, double scale, Orientation orientation)
+void DisplayListRecorder::draw_text_run(Gfx::FloatPoint baseline_start, Gfx::GlyphRun const& glyph_run, Color color, Gfx::IntRect const& rect, double scale, Orientation orientation)
 {
     if (rect.is_empty())
         return;
@@ -255,7 +259,7 @@ void DisplayListRecorder::draw_text_run(Gfx::IntPoint baseline_start, Gfx::Glyph
         .glyph_run = glyph_run,
         .scale = scale,
         .rect = rect,
-        .translation = baseline_start.to_type<float>(),
+        .translation = baseline_start,
         .color = color,
         .orientation = orientation,
     });
@@ -310,7 +314,7 @@ void DisplayListRecorder::pop_stacking_context()
     append(PopStackingContext {});
 }
 
-void DisplayListRecorder::apply_backdrop_filter(Gfx::IntRect const& backdrop_region, BorderRadiiData const& border_radii_data, CSS::ResolvedFilter const& backdrop_filter)
+void DisplayListRecorder::apply_backdrop_filter(Gfx::IntRect const& backdrop_region, BorderRadiiData const& border_radii_data, Vector<Gfx::Filter> const& backdrop_filter)
 {
     if (backdrop_region.is_empty())
         return;
@@ -331,7 +335,7 @@ void DisplayListRecorder::paint_inner_box_shadow_params(PaintBoxShadowParams par
     append(PaintInnerBoxShadow { .box_shadow_params = params });
 }
 
-void DisplayListRecorder::paint_text_shadow(int blur_radius, Gfx::IntRect bounding_rect, Gfx::IntRect text_rect, Gfx::GlyphRun const& glyph_run, double glyph_run_scale, Color color, Gfx::IntPoint draw_location)
+void DisplayListRecorder::paint_text_shadow(int blur_radius, Gfx::IntRect bounding_rect, Gfx::IntRect text_rect, Gfx::GlyphRun const& glyph_run, double glyph_run_scale, Color color, Gfx::FloatPoint draw_location)
 {
     append(PaintTextShadow {
         .glyph_run = glyph_run,
@@ -407,9 +411,9 @@ void DisplayListRecorder::apply_opacity(float opacity)
     append(ApplyOpacity { .opacity = opacity });
 }
 
-void DisplayListRecorder::apply_filters(CSS::ResolvedFilter filter)
+void DisplayListRecorder::apply_filters(Vector<Gfx::Filter> filter)
 {
-    append(ApplyFilters { .filter = filter });
+    append(ApplyFilters { .filter = move(filter) });
 }
 
 void DisplayListRecorder::apply_transform(Gfx::FloatPoint origin, Gfx::FloatMatrix4x4 matrix)

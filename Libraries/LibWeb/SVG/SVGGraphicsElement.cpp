@@ -143,39 +143,47 @@ struct NamedPropertyID {
     StringView name;
 };
 
-void SVGGraphicsElement::apply_presentational_hints(CSS::StyleProperties& style) const
-{
-    static Array const attribute_style_properties {
-        // FIXME: The `fill` attribute and CSS `fill` property are not the same! But our support is limited enough that they are equivalent for now.
-        NamedPropertyID(CSS::PropertyID::Fill),
-        // FIXME: The `stroke` attribute and CSS `stroke` property are not the same! But our support is limited enough that they are equivalent for now.
-        NamedPropertyID(CSS::PropertyID::Stroke),
-        NamedPropertyID(CSS::PropertyID::StrokeDasharray),
-        NamedPropertyID(CSS::PropertyID::StrokeDashoffset),
-        NamedPropertyID(CSS::PropertyID::StrokeLinecap),
-        NamedPropertyID(CSS::PropertyID::StrokeLinejoin),
-        NamedPropertyID(CSS::PropertyID::StrokeMiterlimit),
-        NamedPropertyID(CSS::PropertyID::StrokeWidth),
-        NamedPropertyID(CSS::PropertyID::FillRule),
-        NamedPropertyID(CSS::PropertyID::FillOpacity),
-        NamedPropertyID(CSS::PropertyID::StrokeOpacity),
-        NamedPropertyID(CSS::PropertyID::Opacity),
-        NamedPropertyID(CSS::PropertyID::TextAnchor),
-        NamedPropertyID(CSS::PropertyID::FontSize),
-        NamedPropertyID(CSS::PropertyID::Mask),
-        NamedPropertyID(CSS::PropertyID::MaskType),
-        NamedPropertyID(CSS::PropertyID::ClipPath),
-        NamedPropertyID(CSS::PropertyID::ClipRule),
-        NamedPropertyID(CSS::PropertyID::Display),
-    };
+static Array const attribute_style_properties {
+    // FIXME: The `fill` attribute and CSS `fill` property are not the same! But our support is limited enough that they are equivalent for now.
+    NamedPropertyID(CSS::PropertyID::Fill),
+    // FIXME: The `stroke` attribute and CSS `stroke` property are not the same! But our support is limited enough that they are equivalent for now.
+    NamedPropertyID(CSS::PropertyID::Stroke),
+    NamedPropertyID(CSS::PropertyID::StrokeDasharray),
+    NamedPropertyID(CSS::PropertyID::StrokeDashoffset),
+    NamedPropertyID(CSS::PropertyID::StrokeLinecap),
+    NamedPropertyID(CSS::PropertyID::StrokeLinejoin),
+    NamedPropertyID(CSS::PropertyID::StrokeMiterlimit),
+    NamedPropertyID(CSS::PropertyID::StrokeWidth),
+    NamedPropertyID(CSS::PropertyID::FillRule),
+    NamedPropertyID(CSS::PropertyID::FillOpacity),
+    NamedPropertyID(CSS::PropertyID::StrokeOpacity),
+    NamedPropertyID(CSS::PropertyID::Opacity),
+    NamedPropertyID(CSS::PropertyID::TextAnchor),
+    NamedPropertyID(CSS::PropertyID::FontSize),
+    NamedPropertyID(CSS::PropertyID::Mask),
+    NamedPropertyID(CSS::PropertyID::MaskType),
+    NamedPropertyID(CSS::PropertyID::ClipPath),
+    NamedPropertyID(CSS::PropertyID::ClipRule),
+    NamedPropertyID(CSS::PropertyID::Display),
+};
 
+bool SVGGraphicsElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return any_of(attribute_style_properties, [&](auto& property) { return name.equals_ignoring_ascii_case(property.name); });
+}
+
+void SVGGraphicsElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
+{
     CSS::Parser::ParsingContext parsing_context { document(), CSS::Parser::ParsingContext::Mode::SVGPresentationAttribute };
     for_each_attribute([&](auto& name, auto& value) {
         for (auto property : attribute_style_properties) {
             if (!name.equals_ignoring_ascii_case(property.name))
                 continue;
             if (auto style_value = parse_css_value(parsing_context, value, property.id))
-                style.set_property(property.id, style_value.release_nonnull());
+                cascaded_properties->set_property_from_presentational_hint(property.id, style_value.release_nonnull());
             break;
         }
     });

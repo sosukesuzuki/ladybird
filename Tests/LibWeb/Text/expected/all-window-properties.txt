@@ -57,14 +57,17 @@ CanvasGradient
 CanvasPattern
 CanvasRenderingContext2D
 ChannelMergerNode
+ChannelSplitterNode
 CharacterData
 Clipboard
 ClipboardEvent
+ClipboardItem
 CloseEvent
 CloseWatcher
 Comment
 CompositionEvent
 CompressionStream
+ConstantSourceNode
 CountQueuingStrategy
 Crypto
 CryptoKey
@@ -90,6 +93,7 @@ DataTransferItemList
 DataView
 Date
 DecompressionStream
+DelayNode
 DisposableStack
 Document
 DocumentFragment
@@ -261,6 +265,7 @@ OfflineAudioContext
 Option
 OscillatorNode
 PageTransitionEvent
+PannerNode
 Path2D
 Performance
 PerformanceEntry
@@ -355,6 +360,7 @@ SourceBuffer
 SourceBufferList
 StaticRange
 Storage
+StorageEvent
 StorageManager
 String
 StyleSheet
@@ -378,6 +384,7 @@ ToggleEvent
 TrackEvent
 TransformStream
 TransformStreamDefaultController
+TransitionEvent
 TreeWalker
 TypeError
 UIEvent

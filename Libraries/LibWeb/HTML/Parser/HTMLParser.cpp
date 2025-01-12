@@ -36,6 +36,7 @@
 #include <LibWeb/HTML/Parser/HTMLEncodingDetection.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/Parser/HTMLToken.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
@@ -240,7 +241,6 @@ void HTMLParser::run(const URL::URL& url, HTMLTokenizer::StopAtInsertionPoint st
     m_document->set_source(MUST(String::from_byte_string(m_tokenizer.source())));
     run(stop_at_insertion_point);
     the_end(*m_document, this);
-    m_document->detach_parser({});
 }
 
 // https://html.spec.whatwg.org/multipage/parsing.html#the-end
@@ -298,7 +298,7 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
     while (!document->scripts_to_execute_when_parsing_has_finished().is_empty()) {
         // 1. Spin the event loop until the first script in the list of scripts that will execute when the document has finished parsing
         //    has its "ready to be parser-executed" flag set and the parser's Document has no style sheet that is blocking scripts.
-        main_thread_event_loop().spin_until(GC::create_function(heap, [&] {
+        main_thread_event_loop().spin_until(GC::create_function(heap, [document] {
             return document->scripts_to_execute_when_parsing_has_finished().first()->is_ready_to_be_parser_executed()
                 && !document->has_a_style_sheet_that_is_blocking_scripts();
         }));
@@ -311,7 +311,7 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
     }
 
     // 6. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following substeps:
-    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(heap, [document = document] {
+    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(heap, [document] {
         // 1. Set the Document's load timing info's DOM content loaded event start time to the current high resolution time given the Document's relevant global object.
         document->load_timing_info().dom_content_loaded_event_start_time = HighResolutionTime::current_high_resolution_time(relevant_global_object(*document));
 
@@ -329,19 +329,23 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
     }));
 
     // 7. Spin the event loop until the set of scripts that will execute as soon as possible and the list of scripts that will execute in order as soon as possible are empty.
-    main_thread_event_loop().spin_until(GC::create_function(heap, [&] {
+    main_thread_event_loop().spin_until(GC::create_function(heap, [document] {
         return document->scripts_to_execute_as_soon_as_possible().is_empty();
     }));
 
     // 8. Spin the event loop until there is nothing that delays the load event in the Document.
-    main_thread_event_loop().spin_until(GC::create_function(heap, [&] {
+    main_thread_event_loop().spin_until(GC::create_function(heap, [document] {
         return !document->anything_is_delaying_the_load_event();
     }));
 
     // 9. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following steps:
-    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(document->heap(), [document = document] {
+    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(document->heap(), [document, parser] {
         // 1. Update the current document readiness to "complete".
         document->update_readiness(HTML::DocumentReadyState::Complete);
+
+        // AD-HOC: We need to wait until the document ready state is complete before detaching the parser, otherwise the DOM complete time will not be set correctly.
+        if (parser)
+            document->detach_parser({});
 
         // 2. If the Document object's browsing context is null, then abort these steps.
         if (!document->browsing_context())
@@ -735,10 +739,10 @@ GC::Ref<DOM::Element> HTMLParser::create_element_for(HTMLToken const& token, Opt
     // 6. Let definition be the result of looking up a custom element definition given document, given namespace, local name, and is.
     auto definition = document->lookup_custom_element_definition(namespace_, local_name, is_value);
 
-    // 7. If definition is non-null and the parser was not created as part of the HTML fragment parsing algorithm, then let will execute script be true. Otherwise, let it be false.
+    // 7. Let willExecuteScript be true if definition is non-null and the parser was not created as part of the HTML fragment parsing algorithm; otherwise false.
     bool will_execute_script = definition && !m_parsing_fragment;
 
-    // 8. If will execute script is true, then:
+    // 8. If willExecuteScript is true:
     if (will_execute_script) {
         // 1. Increment document's throw-on-dynamic-markup-insertion counter.
         document->increment_throw_on_dynamic_markup_insertion_counter({});
@@ -749,12 +753,10 @@ GC::Ref<DOM::Element> HTMLParser::create_element_for(HTMLToken const& token, Opt
             perform_a_microtask_checkpoint();
 
         // 3. Push a new element queue onto document's relevant agent's custom element reactions stack.
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*vm.custom_data());
-        custom_data.custom_element_reactions_stack.element_queue_stack.append({});
+        relevant_agent(document).custom_element_reactions_stack.element_queue_stack.append({});
     }
 
-    // 9. Let element be the result of creating an element given document, localName, given namespace, null, and is.
-    //    If will execute script is true, set the synchronous custom elements flag; otherwise, leave it unset.
+    // 9. Let element be the result of creating an element given document, localName, given namespace, null, is, and willExecuteScript.
     auto element = create_element(*document, local_name, namespace_, {}, is_value, will_execute_script).release_value_but_fixme_should_propagate_errors();
 
     // 10. Append each attribute in the given token to element.
@@ -765,12 +767,10 @@ GC::Ref<DOM::Element> HTMLParser::create_element_for(HTMLToken const& token, Opt
         return IterationDecision::Continue;
     });
 
-    // 11. If will execute script is true, then:
+    // 11. If willExecuteScript is true:
     if (will_execute_script) {
         // 1. Let queue be the result of popping from document's relevant agent's custom element reactions stack. (This will be the same element queue as was pushed above.)
-        auto& vm = main_thread_event_loop().vm();
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*vm.custom_data());
-        auto queue = custom_data.custom_element_reactions_stack.element_queue_stack.take_last();
+        auto queue = relevant_agent(document).custom_element_reactions_stack.element_queue_stack.take_last();
 
         // 2. Invoke custom element reactions in queue.
         Bindings::invoke_custom_element_reactions(queue);
@@ -834,6 +834,7 @@ GC::Ref<DOM::Element> HTMLParser::insert_html_element(HTMLToken const& token)
     return insert_foreign_element(token, Namespace::HTML, OnlyAddToElementStack::No);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#the-before-head-insertion-mode
 void HTMLParser::handle_before_head(HTMLToken& token)
 {
     if (token.is_character() && token.is_parser_whitespace()) {
@@ -884,6 +885,7 @@ void HTMLParser::insert_comment(HTMLToken& token)
     adjusted_insertion_location.parent->insert_before(realm().create<DOM::Comment>(document(), token.comment()), adjusted_insertion_location.insert_before_sibling);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead
 void HTMLParser::handle_in_head(HTMLToken& token)
 {
     if (token.is_parser_whitespace()) {
@@ -1055,7 +1057,7 @@ void HTMLParser::handle_in_head(HTMLToken& token)
                 //    If an exception is thrown, then catch it, report the exception, insert an element at the adjusted insertion location with template, and return.
                 auto result = declarative_shadow_host_element.attach_a_shadow_root(mode, clonable, serializable, delegates_focus, Bindings::SlotAssignmentMode::Named);
                 if (result.is_error()) {
-                    report_exception(Bindings::dom_exception_to_throw_completion(vm(), result.release_error()), realm());
+                    report_exception(Bindings::exception_to_throw_completion(vm(), result.release_error()), realm());
                     insert_an_element_at_the_adjusted_insertion_location(template_);
                     return;
                 }
@@ -1245,6 +1247,7 @@ void HTMLParser::insert_character(u32 data)
     m_character_insertion_builder.append_code_point(data);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#the-after-head-insertion-mode
 void HTMLParser::handle_after_head(HTMLToken& token)
 {
     if (token.is_character() && token.is_parser_whitespace()) {
@@ -1331,6 +1334,7 @@ void HTMLParser::close_a_p_element()
     m_stack_of_open_elements.pop_until_an_element_with_tag_name_has_been_popped(HTML::TagNames::p);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-afterbody
 void HTMLParser::handle_after_body(HTMLToken& token)
 {
     if (token.is_character() && token.is_parser_whitespace()) {
@@ -1373,6 +1377,7 @@ void HTMLParser::handle_after_body(HTMLToken& token)
     process_using_the_rules_for(InsertionMode::InBody, token);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#the-after-after-body-insertion-mode
 void HTMLParser::handle_after_after_body(HTMLToken& token)
 {
     if (token.is_comment()) {
@@ -1464,28 +1469,28 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
         return AdoptionAgencyAlgorithmOutcome::DoNothing;
     }
 
-    // 3. Let outer loop counter be 0.
+    // 3. Let outerLoopCounter be 0.
     size_t outer_loop_counter = 0;
 
     // 4. While true:
     while (true) {
-        // 1. If outer loop counter is greater than or equal to 8, then return.
+        // 1. If outerLoopCounter is greater than or equal to 8, then return.
         if (outer_loop_counter >= 8)
             return AdoptionAgencyAlgorithmOutcome::DoNothing;
 
-        // 2. Increment outer loop counter by 1.
+        // 2. Increment outerLoopCounter by 1.
         outer_loop_counter++;
 
-        // 3. Let formatting element be the last element in the list of active formatting elements that:
+        // 3. Let formattingElement be the last element in the list of active formatting elements that:
         //    - is between the end of the list and the last marker in the list, if any, or the start of the list otherwise, and
         //    - has the tag name subject.
         auto* formatting_element = m_list_of_active_formatting_elements.last_element_with_tag_name_before_marker(subject);
 
-        // If there is no such element, then return and instead act as described in the "any other end tag" entry above.
+        //    If there is no such element, then return and instead act as described in the "any other end tag" entry above.
         if (!formatting_element)
             return AdoptionAgencyAlgorithmOutcome::RunAnyOtherEndTagSteps;
 
-        // 4. If formatting element is not in the stack of open elements,
+        // 4. If formattingElement is not in the stack of open elements,
         if (!m_stack_of_open_elements.contains(*formatting_element)) {
             // then this is a parse error;
             log_parse_error();
@@ -1495,7 +1500,7 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
             return AdoptionAgencyAlgorithmOutcome::DoNothing;
         }
 
-        // 5. If formatting element is in the stack of open elements, but the element is not in scope,
+        // 5. If formattingElement is in the stack of open elements, but the element is not in scope,
         if (!m_stack_of_open_elements.has_in_scope(*formatting_element)) {
             // then this is a parse error;
             log_parse_error();
@@ -1503,50 +1508,50 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
             return AdoptionAgencyAlgorithmOutcome::DoNothing;
         }
 
-        // 6. If formatting element is not the current node,
+        // 6. If formattingElement is not the current node,
         if (formatting_element != current_node()) {
             // this is a parse error. (But do not return.)
             log_parse_error();
         }
 
-        // 7. Let furthest block be the topmost node in the stack of open elements that is lower in the stack than formatting element,
+        // 7. Let furthestBlock be the topmost node in the stack of open elements that is lower in the stack than formattingElement,
         //    and is an element in the special category. There might not be one.
         GC::Ptr<DOM::Element> furthest_block = m_stack_of_open_elements.topmost_special_node_below(*formatting_element);
 
-        // 8. If there is no furthest block
+        // 8. If there is no furthestBlock,
         if (!furthest_block) {
             // then the UA must first pop all the nodes from the bottom of the stack of open elements,
-            // from the current node up to and including formatting element,
+            // from the current node up to and including formattingElement,
             while (current_node() != formatting_element)
                 (void)m_stack_of_open_elements.pop();
             (void)m_stack_of_open_elements.pop();
 
-            // then remove formatting element from the list of active formatting elements,
+            // then remove formattingElement from the list of active formatting elements,
             m_list_of_active_formatting_elements.remove(*formatting_element);
             // and finally return.
             return AdoptionAgencyAlgorithmOutcome::DoNothing;
         }
 
-        // 9. Let common ancestor be the element immediately above formatting element in the stack of open elements.
+        // 9. Let commonAncestor be the element immediately above formattingElement in the stack of open elements.
         auto common_ancestor = m_stack_of_open_elements.element_immediately_above(*formatting_element);
 
-        // 10. Let a bookmark note the position of formatting element in the list of active formatting elements
+        // 10. Let a bookmark note the position of formattingElement in the list of active formatting elements
         //     relative to the elements on either side of it in the list.
         auto bookmark = m_list_of_active_formatting_elements.find_index(*formatting_element).value();
 
-        // 11. Let node and last node be furthest block.
+        // 11. Let node and lastNode be furthestBlock.
         auto node = furthest_block;
         auto last_node = furthest_block;
 
-        // Keep track of this for later
+        // NOTE: Keep track of this for later
         auto node_above_node = m_stack_of_open_elements.element_immediately_above(*node);
 
-        // 12. Let inner loop counter be 0.
+        // 12. Let innerLoopCounter be 0.
         size_t inner_loop_counter = 0;
 
         // 13. While true:
         while (true) {
-            // 1. Increment inner loop counter by 1.
+            // 1. Increment innerLoopCounter by 1.
             inner_loop_counter++;
 
             // 2. Let node be the element immediately above node in the stack of open elements,
@@ -1555,14 +1560,14 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
             node = node_above_node;
             VERIFY(node);
 
-            // Keep track of this for later
+            // NOTE: Keep track of this for later
             node_above_node = m_stack_of_open_elements.element_immediately_above(*node);
 
-            // 3. If node is formatting element, then break.
+            // 3. If node is formattingElement, then break.
             if (node.ptr() == formatting_element)
                 break;
 
-            // 4. If inner loop counter is greater than 3 and node is in the list of active formatting elements,
+            // 4. If innerLoopCounter is greater than 3 and node is in the list of active formatting elements,
             if (inner_loop_counter > 3 && m_list_of_active_formatting_elements.contains(*node)) {
                 auto node_index = m_list_of_active_formatting_elements.find_index(*node);
                 if (node_index.has_value() && node_index.value() < bookmark)
@@ -1571,7 +1576,7 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
                 m_list_of_active_formatting_elements.remove(*node);
             }
 
-            // 5. If node is not in the list of active formatting elements
+            // 5. If node is not in the list of active formatting elements,
             if (!m_list_of_active_formatting_elements.contains(*node)) {
                 // then remove node from the stack of open elements and continue.
                 m_stack_of_open_elements.remove(*node);
@@ -1579,47 +1584,47 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
             }
 
             // 6. Create an element for the token for which the element node was created,
-            //    in the HTML namespace, with common ancestor as the intended parent;
+            //    in the HTML namespace, with commonAncestor as the intended parent;
             // FIXME: hold onto the real token
             auto element = create_element_for(HTMLToken::make_start_tag(node->local_name()), Namespace::HTML, *common_ancestor);
-            // replace the entry for node in the list of active formatting elements with an entry for the new element,
+            //    replace the entry for node in the list of active formatting elements with an entry for the new element,
             m_list_of_active_formatting_elements.replace(*node, *element);
-            // replace the entry for node in the stack of open elements with an entry for the new element,
+            //    replace the entry for node in the stack of open elements with an entry for the new element,
             m_stack_of_open_elements.replace(*node, element);
-            // and let node be the new element.
+            //    and let node be the new element.
             node = element;
 
-            // 7. If last node is furthest block,
+            // 7. If lastNode is furthestBlock,
             if (last_node == furthest_block) {
                 // then move the aforementioned bookmark to be immediately after the new node in the list of active formatting elements.
                 bookmark = m_list_of_active_formatting_elements.find_index(*node).value() + 1;
             }
 
-            // 8. Append last node to node.
+            // 8. Append lastNode to node.
             MUST(node->append_child(*last_node));
 
-            // 9. Set last node to node.
+            // 9. Set lastNode to node.
             last_node = node;
         }
 
-        // 14. Insert whatever last node ended up being in the previous step at the appropriate place for inserting a node,
-        //     but using common ancestor as the override target.
+        // 14. Insert whatever lastNode ended up being in the previous step at the appropriate place for inserting a node,
+        //     but using commonAncestor as the override target.
         auto adjusted_insertion_location = find_appropriate_place_for_inserting_node(common_ancestor);
         adjusted_insertion_location.parent->insert_before(*last_node, adjusted_insertion_location.insert_before_sibling, false);
 
-        // 15. Create an element for the token for which formatting element was created,
-        //     in the HTML namespace, with furthest block as the intended parent.
+        // 15. Create an element for the token for which formattingElement was created,
+        //     in the HTML namespace, with furthestBlock as the intended parent.
         // FIXME: hold onto the real token
         auto element = create_element_for(HTMLToken::make_start_tag(formatting_element->local_name()), Namespace::HTML, *furthest_block);
 
-        // 16. Take all of the child nodes of furthest block and append them to the element created in the last step.
+        // 16. Take all of the child nodes of furthestBlock and append them to the element created in the last step.
         for (auto& child : furthest_block->children_as_vector())
             MUST(element->append_child(furthest_block->remove_child(*child).release_value()));
 
-        // 17. Append that new element to furthest block.
+        // 17. Append that new element to furthestBlock.
         MUST(furthest_block->append_child(*element));
 
-        // 18. Remove formatting element from the list of active formatting elements,
+        // 18. Remove formattingElement from the list of active formatting elements,
         //     and insert the new element into the list of active formatting elements at the position of the aforementioned bookmark.
         auto formatting_element_index = m_list_of_active_formatting_elements.find_index(*formatting_element);
         if (formatting_element_index.has_value() && formatting_element_index.value() < bookmark)
@@ -1627,8 +1632,8 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
         m_list_of_active_formatting_elements.remove(*formatting_element);
         m_list_of_active_formatting_elements.insert_at(bookmark, *element);
 
-        // 19. Remove formatting element from the stack of open elements, and insert the new element
-        //     into the stack of open elements immediately below the position of furthest block in that stack.
+        // 19. Remove formattingElement from the stack of open elements, and insert the new element
+        //     into the stack of open elements immediately below the position of furthestBlock in that stack.
         m_stack_of_open_elements.remove(*formatting_element);
         m_stack_of_open_elements.insert_immediately_below(*element, *furthest_block);
     }
@@ -3225,6 +3230,7 @@ void HTMLParser::close_the_cell()
     m_insertion_mode = InsertionMode::InRow;
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intd
 void HTMLParser::handle_in_cell(HTMLToken& token)
 {
     if (token.is_end_tag() && token.tag_name().is_one_of(HTML::TagNames::td, HTML::TagNames::th)) {
@@ -3316,6 +3322,7 @@ void HTMLParser::handle_in_table_text(HTMLToken& token)
     process_using_the_rules_for(m_insertion_mode, token);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intbody
 void HTMLParser::handle_in_table_body(HTMLToken& token)
 {
     if (token.is_start_tag() && token.tag_name() == HTML::TagNames::tr) {
@@ -3582,6 +3589,7 @@ AnythingElse:
     m_foster_parenting = false;
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inselectintable
 void HTMLParser::handle_in_select_in_table(HTMLToken& token)
 {
     if (token.is_start_tag() && token.tag_name().is_one_of(HTML::TagNames::caption, HTML::TagNames::table, HTML::TagNames::tbody, HTML::TagNames::tfoot, HTML::TagNames::thead, HTML::TagNames::tr, HTML::TagNames::td, HTML::TagNames::th)) {
@@ -3607,6 +3615,7 @@ void HTMLParser::handle_in_select_in_table(HTMLToken& token)
     process_using_the_rules_for(InsertionMode::InSelect, token);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inselect
 void HTMLParser::handle_in_select(HTMLToken& token)
 {
     if (token.is_character()) {
@@ -3749,6 +3758,7 @@ void HTMLParser::handle_in_select(HTMLToken& token)
     log_parse_error();
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incaption
 void HTMLParser::handle_in_caption(HTMLToken& token)
 {
     if (token.is_end_tag() && token.tag_name() == HTML::TagNames::caption) {
@@ -3799,6 +3809,7 @@ void HTMLParser::handle_in_caption(HTMLToken& token)
     process_using_the_rules_for(InsertionMode::InBody, token);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incolgroup
 void HTMLParser::handle_in_column_group(HTMLToken& token)
 {
     if (token.is_character() && token.is_parser_whitespace()) {
@@ -4090,6 +4101,7 @@ void HTMLParser::handle_in_frameset(HTMLToken& token)
     log_parse_error();
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-afterframeset
 void HTMLParser::handle_after_frameset(HTMLToken& token)
 {
     if (token.is_character() && token.is_parser_whitespace()) {
@@ -4130,6 +4142,7 @@ void HTMLParser::handle_after_frameset(HTMLToken& token)
     log_parse_error();
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#the-after-after-frameset-insertion-mode
 void HTMLParser::handle_after_after_frameset(HTMLToken& token)
 {
     if (token.is_comment()) {
@@ -4454,7 +4467,7 @@ DOM::Document& HTMLParser::document()
 // https://html.spec.whatwg.org/multipage/parsing.html#parsing-html-fragments
 Vector<GC::Root<DOM::Node>> HTMLParser::parse_html_fragment(DOM::Element& context_element, StringView markup, AllowDeclarativeShadowRoots allow_declarative_shadow_roots)
 {
-    // 1. Create a new Document node, and mark it as being an HTML document.
+    // 1. Let document be a Document node whose type is "html".
     auto temp_document = DOM::Document::create_for_fragment_parsing(context_element.realm());
     temp_document->set_document_type(DOM::Document::Type::HTML);
 
@@ -4462,21 +4475,24 @@ Vector<GC::Root<DOM::Node>> HTMLParser::parse_html_fragment(DOM::Element& contex
     //         This is required for Document::parse_url() to work inside iframe srcdoc documents.
     temp_document->set_about_base_url(context_element.document().about_base_url());
 
-    // 2. If the node document of the context element is in quirks mode, then let the Document be in quirks mode.
-    //    Otherwise, the node document of the context element is in limited-quirks mode, then let the Document be in limited-quirks mode.
-    //    Otherwise, leave the Document in no-quirks mode.
-    temp_document->set_quirks_mode(context_element.document().mode());
+    // 2. If context's node document is in quirks mode, then set document's mode to "quirks".
+    if (context_element.document().in_quirks_mode())
+        temp_document->set_quirks_mode(DOM::QuirksMode::Yes);
 
-    // 3. If allowDeclarativeShadowRoots is true, then set Document's allow declarative shadow roots to true.
+    // 3. Otherwise, if context's node document is in limited-quirks mode, then set document's mode to "limited-quirks".
+    else if (context_element.document().in_limited_quirks_mode())
+        temp_document->set_quirks_mode(DOM::QuirksMode::Limited);
+
+    // 4. If allowDeclarativeShadowRoots is true, then set document's allow declarative shadow roots to true.
     if (allow_declarative_shadow_roots == AllowDeclarativeShadowRoots::Yes)
         temp_document->set_allow_declarative_shadow_roots(true);
 
-    // 4. Create a new HTML parser, and associate it with the just created Document node.
+    // 5. Create a new HTML parser, and associate it with document.
     auto parser = HTMLParser::create(*temp_document, markup, "utf-8"sv);
     parser->m_context_element = context_element;
     parser->m_parsing_fragment = true;
 
-    // 5. Set the state of the HTML parser's tokenization stage as follows, switching on the context element:
+    // 6. Set the state of the HTML parser's tokenization stage as follows, switching on the context element:
     // - title
     // - textarea
     if (context_element.local_name().is_one_of(HTML::TagNames::title, HTML::TagNames::textarea)) {
@@ -4513,37 +4529,36 @@ Vector<GC::Root<DOM::Node>> HTMLParser::parse_html_fragment(DOM::Element& contex
         // Leave the tokenizer in the data state.
     }
 
-    // 6. Let root be a new html element with no attributes.
-    auto root = create_element(context_element.document(), HTML::TagNames::html, Namespace::HTML).release_value_but_fixme_should_propagate_errors();
+    // 7. Let root be the result of creating an element given document, "html", and the HTML namespace.
+    auto root = MUST(create_element(context_element.document(), HTML::TagNames::html, Namespace::HTML));
 
-    // 7. Append the element root to the Document node created above.
+    // 8. Append root to document.
     MUST(temp_document->append_child(root));
 
-    // 8. Set up the parser's stack of open elements so that it contains just the single element root.
+    // 9. Set up the HTML parser's stack of open elements so that it contains just the single element root.
     parser->m_stack_of_open_elements.push(root);
 
-    // 9. If the context element is a template element,
-    if (context_element.local_name() == HTML::TagNames::template_) {
-        // push "in template" onto the stack of template insertion modes so that it is the new current template insertion mode.
+    // 10. If context is a template element, then push "in template" onto the stack of template insertion modes
+    //     so that it is the new current template insertion mode.
+    if (context_element.local_name() == HTML::TagNames::template_)
         parser->m_stack_of_template_insertion_modes.append(InsertionMode::InTemplate);
-    }
 
-    // FIXME: 10. Create a start tag token whose name is the local name of context and whose attributes are the attributes of context.
-    //           Let this start tag token be the start tag token of the context node, e.g. for the purposes of determining if it is an HTML integration point.
+    // FIXME: 11. Create a start tag token whose name is the local name of context and whose attributes are the attributes of context.
+    //            Let this start tag token be the start tag token of context; e.g. for the purposes of determining if it is an HTML integration point.
 
-    // 11. Reset the parser's insertion mode appropriately.
+    // 12. Reset the parser's insertion mode appropriately.
     parser->reset_the_insertion_mode_appropriately();
 
-    // 12. Set the parser's form element pointer to the nearest node to the context element that is a form element
+    // 13. Set the HTML parser's form element pointer to the nearest node to context that is a form element
     //     (going straight up the ancestor chain, and including the element itself, if it is a form element), if any.
     //     (If there is no such form element, the form element pointer keeps its initial value, null.)
     parser->m_form_element = context_element.first_ancestor_of_type<HTMLFormElement>();
 
-    // 13. Place the input into the input stream for the HTML parser just created. The encoding confidence is irrelevant.
-    // 14. Start the parser and let it run until it has consumed all the characters just inserted into the input stream.
+    // 14. Place the input into the input stream for the HTML parser just created. The encoding confidence is irrelevant.
+    // 15. Start the HTML parser and let it run until it has consumed all the characters just inserted into the input stream.
     parser->run(context_element.document().url());
 
-    // 15. Return the child nodes of root, in tree order.
+    // 16. Return root's children, in tree order.
     Vector<GC::Root<DOM::Node>> children;
     while (GC::Ptr<DOM::Node> child = root->first_child()) {
         MUST(root->remove_child(*child));
@@ -5133,8 +5148,7 @@ void HTMLParser::insert_an_element_at_the_adjusted_insertion_location(GC::Ref<DO
     // 3. If the parser was not created as part of the HTML fragment parsing algorithm,
     //    then push a new element queue onto element's relevant agent's custom element reactions stack.
     if (!m_parsing_fragment) {
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*relevant_agent(*element).custom_data());
-        custom_data.custom_element_reactions_stack.element_queue_stack.append({});
+        relevant_agent(*element).custom_element_reactions_stack.element_queue_stack.append({});
     }
 
     // 4. Insert element at the adjusted insertion location.
@@ -5143,8 +5157,7 @@ void HTMLParser::insert_an_element_at_the_adjusted_insertion_location(GC::Ref<DO
     // 5. If the parser was not created as part of the HTML fragment parsing algorithm,
     //    then pop the element queue from element's relevant agent's custom element reactions stack, and invoke custom element reactions in that queue.
     if (!m_parsing_fragment) {
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*relevant_agent(*element).custom_data());
-        auto queue = custom_data.custom_element_reactions_stack.element_queue_stack.take_last();
+        auto queue = relevant_agent(*element).custom_element_reactions_stack.element_queue_stack.take_last();
         Bindings::invoke_custom_element_reactions(queue);
     }
 }

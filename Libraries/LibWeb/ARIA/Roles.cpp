@@ -11,13 +11,10 @@ namespace Web::ARIA {
 
 StringView role_name(Role role)
 {
-    // Note: Role::switch_ is mapped to "switch" (due to C++ keyword clash)
     switch (role) {
-#define __ENUMERATE_ARIA_ROLE(name)                \
-    case Role::name:                               \
-        if constexpr (Role::name == Role::switch_) \
-            return "switch"sv;                     \
-        return #name##sv;
+#define __ENUMERATE_ARIA_ROLE(name, attribute) \
+    case Role::name:                           \
+        return attribute##sv;
         ENUMERATE_ARIA_ROLES
 #undef __ENUMERATE_ARIA_ROLE
     default:
@@ -27,15 +24,9 @@ StringView role_name(Role role)
 
 Optional<Role> role_from_string(StringView role_name)
 {
-    // Note: "switch" is mapped to Role::switch_ (due to C++ keyword clash)
-#define __ENUMERATE_ARIA_ROLE(name)                           \
-    if constexpr (Role::name == Role::switch_) {              \
-        if (role_name.equals_ignoring_ascii_case("switch"sv)) \
-            return Role::switch_;                             \
-    } else {                                                  \
-        if (role_name.equals_ignoring_ascii_case(#name##sv))  \
-            return Role::name;                                \
-    }
+#define __ENUMERATE_ARIA_ROLE(name, attribute)               \
+    if (role_name.equals_ignoring_ascii_case(attribute##sv)) \
+        return Role::name;
     ENUMERATE_ARIA_ROLES
 #undef __ENUMERATE_ARIA_ROLE
     return {};
@@ -69,6 +60,7 @@ bool is_widget_role(Role role)
         Role::link,
         Role::menuitem,
         Role::menuitemcheckbox,
+        Role::menuitemradio,
         Role::option,
         Role::progressbar,
         Role::radio,
@@ -102,6 +94,7 @@ bool is_document_structure_role(Role role)
         Role::blockquote,
         Role::caption,
         Role::cell,
+        Role::code,
         Role::columnheader,
         Role::definition,
         Role::deletion,
@@ -129,6 +122,8 @@ bool is_document_structure_role(Role role)
         Role::separator, // TODO: Only when not focusable
         Role::strong,
         Role::subscript,
+        Role::suggestion,
+        Role::superscript,
         Role::table,
         Role::term,
         Role::time,
@@ -167,15 +162,6 @@ bool is_windows_role(Role role)
     return first_is_one_of(role,
         Role::alertdialog,
         Role::dialog);
-}
-
-bool is_non_abstract_role(Role role)
-{
-    return is_widget_role(role)
-        || is_document_structure_role(role)
-        || is_landmark_role(role)
-        || is_live_region_role(role)
-        || is_windows_role(role);
 }
 
 // https://www.w3.org/TR/wai-aria-1.2/#namefromcontent

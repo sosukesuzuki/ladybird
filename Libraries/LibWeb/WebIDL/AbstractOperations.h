@@ -21,7 +21,7 @@ bool is_buffer_source_type(JS::Value);
 GC::Ptr<JS::ArrayBuffer> underlying_buffer_source(JS::Object& buffer_source);
 ErrorOr<ByteBuffer> get_buffer_source_copy(JS::Object const& buffer_source);
 
-JS::Completion call_user_object_operation(WebIDL::CallbackType& callback, String const& operation_name, Optional<JS::Value> this_argument, GC::MarkedVector<JS::Value> args);
+JS::Completion call_user_object_operation(WebIDL::CallbackType& callback, String const& operation_name, Optional<JS::Value> this_argument, GC::RootVector<JS::Value> args);
 
 JS::ThrowCompletionOr<String> to_string(JS::VM&, JS::Value);
 JS::ThrowCompletionOr<String> to_usv_string(JS::VM&, JS::Value);
@@ -33,27 +33,40 @@ JS::Completion call_user_object_operation(WebIDL::CallbackType& callback, String
 {
     auto& function_object = callback.callback;
 
-    GC::MarkedVector<JS::Value> arguments_list { function_object->heap() };
+    GC::RootVector<JS::Value> arguments_list { function_object->heap() };
     (arguments_list.append(forward<Args>(args)), ...);
 
     return call_user_object_operation(callback, operation_name, move(this_argument), move(arguments_list));
 }
 
-JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, GC::MarkedVector<JS::Value> args);
+enum class ExceptionBehavior {
+    NotSpecified,
+    Report,
+    Rethrow,
+};
+
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, ExceptionBehavior exception_behavior, GC::RootVector<JS::Value> args);
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, GC::RootVector<JS::Value> args);
 
 // https://webidl.spec.whatwg.org/#invoke-a-callback-function
 template<typename... Args>
-JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, Args&&... args)
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, ExceptionBehavior exception_behavior, Args&&... args)
 {
     auto& function_object = callback.callback;
 
-    GC::MarkedVector<JS::Value> arguments_list { function_object->heap() };
+    GC::RootVector<JS::Value> arguments_list { function_object->heap() };
     (arguments_list.append(forward<Args>(args)), ...);
 
-    return invoke_callback(callback, move(this_argument), move(arguments_list));
+    return invoke_callback(callback, move(this_argument), exception_behavior, move(arguments_list));
 }
 
-JS::Completion construct(WebIDL::CallbackType& callback, GC::MarkedVector<JS::Value> args);
+template<typename... Args>
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, Args&&... args)
+{
+    return invoke_callback(callback, move(this_argument), ExceptionBehavior::NotSpecified, forward<Args>(args)...);
+}
+
+JS::Completion construct(WebIDL::CallbackType& callback, GC::RootVector<JS::Value> args);
 
 // https://webidl.spec.whatwg.org/#construct-a-callback-function
 template<typename... Args>
@@ -61,7 +74,7 @@ JS::Completion construct(WebIDL::CallbackType& callback, Args&&... args)
 {
     auto& function_object = callback.callback;
 
-    GC::MarkedVector<JS::Value> arguments_list { function_object->heap() };
+    GC::RootVector<JS::Value> arguments_list { function_object->heap() };
     (arguments_list.append(forward<Args>(args)), ...);
 
     return construct(callback, move(arguments_list));

@@ -4,10 +4,12 @@
  * Copyright (c) 2021-2023, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2024, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Bitmap.h>
 #include <AK/CharacterTypes.h>
 #include <AK/Debug.h>
 #include <AK/GenericLexer.h>
@@ -15,7 +17,7 @@
 #include <AK/StringBuilder.h>
 #include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibJS/Runtime/NativeFunction.h>
@@ -32,12 +34,17 @@
 #include <LibWeb/CSS/AnimationEvent.h>
 #include <LibWeb/CSS/CSSAnimation.h>
 #include <LibWeb/CSS/CSSImportRule.h>
+#include <LibWeb/CSS/CSSTransition.h>
 #include <LibWeb/CSS/FontFaceSet.h>
 #include <LibWeb/CSS/MediaQueryList.h>
 #include <LibWeb/CSS/MediaQueryListEvent.h>
+#include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
+#include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/SystemColor.h>
+#include <LibWeb/CSS/TransitionEvent.h>
 #include <LibWeb/CSS/VisualViewport.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
 #include <LibWeb/DOM/AdoptedStyleSheets.h>
@@ -94,6 +101,7 @@
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLLinkElement.h>
+#include <LibWeb/HTML/HTMLMetaElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
 #include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
@@ -110,10 +118,12 @@
 #include <LibWeb/HTML/Numbers.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/PopStateEvent.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/SharedResourceRequest.h>
+#include <LibWeb/HTML/Storage.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/WindowProxy.h>
@@ -442,13 +452,13 @@ void Document::initialize(JS::Realm& realm)
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#populate-with-html/head/body
 WebIDL::ExceptionOr<void> Document::populate_with_html_head_and_body()
 {
-    // 1. Let html be the result of creating an element given document, html, and the HTML namespace.
+    // 1. Let html be the result of creating an element given document, "html", and the HTML namespace.
     auto html = TRY(DOM::create_element(*this, HTML::TagNames::html, Namespace::HTML));
 
-    // 2. Let head be the result of creating an element given document, head, and the HTML namespace.
+    // 2. Let head be the result of creating an element given document, "head", and the HTML namespace.
     auto head = TRY(DOM::create_element(*this, HTML::TagNames::head, Namespace::HTML));
 
-    // 3. Let body be the result of creating an element given document, body, and the HTML namespace.
+    // 3. Let body be the result of creating an element given document, "body", and the HTML namespace.
     auto body = TRY(DOM::create_element(*this, HTML::TagNames::body, Namespace::HTML));
 
     // 4. Append html to document.
@@ -506,6 +516,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_scripts_to_execute_as_soon_as_possible);
     visitor.visit(m_node_iterators);
     visitor.visit(m_document_observers);
+    visitor.visit(m_document_observers_being_notified);
     visitor.visit(m_pending_scroll_event_targets);
     visitor.visit(m_pending_scrollend_event_targets);
     visitor.visit(m_resize_observers);
@@ -522,6 +533,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
 
     for (auto& event : m_pending_animation_event_queue) {
         visitor.visit(event.event);
+        visitor.visit(event.animation);
         visitor.visit(event.target);
     }
 
@@ -533,6 +545,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_top_layer_pending_removals);
     visitor.visit(m_console_client);
     visitor.visit(m_editing_host_manager);
+    visitor.visit(m_local_storage_holder);
+    visitor.visit(m_session_storage_holder);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -649,6 +663,15 @@ WebIDL::ExceptionOr<Document*> Document::open(Optional<String> const&, Optional<
 
     // 11. Replace all with null within document, without firing any mutation events.
     replace_all(nullptr);
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    // When document.open() is called and a document's singleton objects are all replaced by new instances of those
+    // objects, editing state associated with that document (including the CSS styling flag, default single-line
+    // container name, and any state overrides or value overrides) must be reset.
+    set_css_styling_flag(false);
+    set_default_single_line_container_name(HTML::TagNames::div);
+    reset_command_state_overrides();
+    reset_command_value_overrides();
 
     // 12. If document is fully active, then:
     if (is_fully_active()) {
@@ -929,7 +952,7 @@ WebIDL::ExceptionOr<void> Document::set_title(String const& title)
         }
         // 2. Otherwise:
         else {
-            // 1. Let element be the result of creating an element given the document element's node document, title,
+            // 1. Let element be the result of creating an element given the document element's node document, "title",
             //    and the SVG namespace.
             element = TRY(DOM::create_element(*this, HTML::TagNames::title, Namespace::SVG));
 
@@ -958,7 +981,7 @@ WebIDL::ExceptionOr<void> Document::set_title(String const& title)
         }
         // 3. Otherwise:
         else {
-            // 1. Let element be the result of creating an element given the document element's node document, title,
+            // 1. Let element be the result of creating an element given the document element's node document, "title",
             //    and the HTML namespace.
             element = TRY(DOM::create_element(*this, HTML::TagNames::title, Namespace::HTML));
 
@@ -1081,7 +1104,38 @@ URL::URL Document::parse_url(StringView url) const
     auto base_url = this->base_url();
 
     // 2. Return the result of applying the URL parser to url, with baseURL.
-    return DOMURL::parse(url, base_url, Optional<StringView> { m_encoding });
+    return DOMURL::parse(url, base_url);
+}
+
+// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#encoding-parsing-a-url
+URL::URL Document::encoding_parse_url(StringView url) const
+{
+    // 1. Let encoding be UTF-8.
+    // 2. If environment is a Document object, then set encoding to environment's character encoding.
+    auto encoding = encoding_or_default();
+
+    // 3. Otherwise, if environment's relevant global object is a Window object, set encoding to environment's relevant
+    //    global object's associated Document's character encoding.
+
+    // 4. Let baseURL be environment's base URL, if environment is a Document object; otherwise environment's API base URL.
+    auto base_url = this->base_url();
+
+    // 5. Return the result of applying the URL parser to url, with baseURL and encoding.
+    return DOMURL::parse(url, base_url, encoding);
+}
+
+// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#encoding-parsing-and-serializing-a-url
+Optional<String> Document::encoding_parse_and_serialize_url(StringView url) const
+{
+    // 1. Let url be the result of encoding-parsing a URL given url, relative to environment.
+    auto parsed_url = encoding_parse_url(url);
+
+    // 2. If url is failure, then return failure.
+    if (!parsed_url.is_valid())
+        return {};
+
+    // 3. Return the result of applying the URL serializer to url.
+    return parsed_url.serialize();
 }
 
 void Document::set_needs_layout()
@@ -1265,10 +1319,13 @@ void Document::update_layout()
     if (is<Element>(node)) {
         if (needs_full_style_update || node.needs_style_update()) {
             invalidation |= static_cast<Element&>(node).recompute_style();
+        } else if (node.needs_inherited_style_update()) {
+            invalidation |= static_cast<Element&>(node).recompute_inherited_style();
         }
-        is_display_none = static_cast<Element&>(node).computed_css_values()->display().is_none();
+        is_display_none = static_cast<Element&>(node).computed_properties()->display().is_none();
     }
     node.set_needs_style_update(false);
+    node.set_needs_inherited_style_update(false);
 
     if (needs_full_style_update || node.child_needs_style_update()) {
         if (node.is_element()) {
@@ -1282,7 +1339,7 @@ void Document::update_layout()
         }
 
         node.for_each_child([&](auto& child) {
-            if (needs_full_style_update || child.needs_style_update() || child.child_needs_style_update()) {
+            if (needs_full_style_update || child.needs_style_update() || child.needs_inherited_style_update() || child.child_needs_style_update()) {
                 auto subtree_invalidation = update_style_recursively(child, style_computer);
                 if (!is_display_none)
                     invalidation |= subtree_invalidation;
@@ -1354,7 +1411,7 @@ void Document::update_animated_style_if_needed()
 
         for (auto& animation : timeline->associated_animations()) {
             if (auto effect = animation->effect())
-                effect->update_style_properties();
+                effect->update_computed_properties();
         }
     }
     m_needs_animated_style_update = false;
@@ -1387,6 +1444,89 @@ void Document::set_active_link_color(Color color)
 void Document::set_visited_link_color(Color color)
 {
     m_visited_link_color = color;
+}
+
+Optional<Vector<String> const&> Document::supported_color_schemes() const
+{
+    return m_supported_color_schemes;
+}
+
+// https://html.spec.whatwg.org/multipage/semantics.html#meta-color-scheme
+void Document::obtain_supported_color_schemes()
+{
+    m_supported_color_schemes = {};
+
+    // 1. Let candidate elements be the list of all meta elements that meet the following criteria, in tree order:
+    for_each_in_subtree_of_type<HTML::HTMLMetaElement>([&](HTML::HTMLMetaElement& element) {
+        //     * the element is in a document tree;
+        //     * the element has a name attribute, whose value is an ASCII case-insensitive match for color-scheme; and
+        //     * the element has a content attribute.
+
+        // 2. For each element in candidate elements:
+        auto content = element.attribute(HTML::AttributeNames::content);
+        if (element.name().has_value() && element.name()->equals_ignoring_ascii_case("color-scheme"sv) && content.has_value()) {
+            // 1. Let parsed be the result of parsing a list of component values given the value of element's content attribute.
+            auto context = CSS::Parser::ParsingContext { document() };
+            auto parsed = parse_css_value(context, content.value(), CSS::PropertyID::ColorScheme);
+
+            // 2. If parsed is a valid CSS 'color-scheme' property value, then return parsed.
+            if (!parsed.is_null() && parsed->is_color_scheme()) {
+                m_supported_color_schemes = parsed->as_color_scheme().schemes();
+                return TraversalDecision::Break;
+            }
+        }
+
+        return TraversalDecision::Continue;
+    });
+
+    // 3. Return null.
+}
+
+// https://html.spec.whatwg.org/multipage/semantics.html#meta-theme-color
+void Document::obtain_theme_color()
+{
+    Color theme_color = Color::Transparent;
+
+    // 1. Let candidate elements be the list of all meta elements that meet the following criteria, in tree order:
+    for_each_in_subtree_of_type<HTML::HTMLMetaElement>([&](HTML::HTMLMetaElement& element) {
+        //     * the element is in a document tree;
+        //     * the element has a name attribute, whose value is an ASCII case-insensitive match for theme-color; and
+        //     * the element has a content attribute.
+
+        // 2. For each element in candidate elements:
+        auto content = element.attribute(HTML::AttributeNames::content);
+        if (element.name().has_value() && element.name()->equals_ignoring_ascii_case("theme-color"sv) && content.has_value()) {
+            // 1. If element has a media attribute and the value of element's media attribute does not match the environment, then continue.
+            auto context = CSS::Parser::ParsingContext { document() };
+            auto media = element.attribute(HTML::AttributeNames::media);
+            if (media.has_value()) {
+                auto query = parse_media_query(context, media.value());
+                if (window() && !query->evaluate(*window()))
+                    return TraversalDecision::Continue;
+            }
+
+            // 2. Let value be the result of stripping leading and trailing ASCII whitespace from the value of element's content attribute.
+            auto value = content->bytes_as_string_view().trim(Infra::ASCII_WHITESPACE);
+
+            // 3. Let color be the result of parsing value.
+            auto css_value = parse_css_value(context, value, CSS::PropertyID::Color);
+
+            // 4. If color is not failure, then return color.
+            if (!css_value.is_null() && css_value->is_color()) {
+                Optional<Layout::NodeWithStyle const&> root_node;
+                if (html_element())
+                    root_node = *html_element()->layout_node();
+
+                theme_color = css_value->to_color(root_node);
+                return TraversalDecision::Break;
+            }
+        }
+
+        return TraversalDecision::Continue;
+    });
+
+    // 3. Return nothing(the page has no theme color).
+    document().page().client().page_did_change_theme_color(theme_color);
 }
 
 Layout::Viewport const* Document::layout_node() const
@@ -1444,19 +1584,114 @@ static Node* find_common_ancestor(Node* a, Node* b)
     return nullptr;
 }
 
+void Document::invalidate_style_for_elements_affected_by_hover_change(Node& old_new_hovered_common_ancestor, GC::Ptr<Node> hovered_node)
+{
+    auto const& hover_rules = style_computer().get_hover_rules();
+    if (hover_rules.is_empty())
+        return;
+
+    auto& invalidation_root = [&] -> Node& {
+        if (style_computer().has_has_selectors())
+            return old_new_hovered_common_ancestor;
+        return old_new_hovered_common_ancestor;
+    }();
+
+    Vector<Element&> elements;
+    invalidation_root.for_each_in_inclusive_subtree([&](Node& node) {
+        if (!node.is_element())
+            return TraversalDecision::Continue;
+        auto& element = static_cast<Element&>(node);
+        if (element.affected_by_hover())
+            elements.append(element);
+        return TraversalDecision::Continue;
+    });
+
+    auto& root = old_new_hovered_common_ancestor.root();
+    auto shadow_root = is<ShadowRoot>(root) ? static_cast<ShadowRoot const*>(&root) : nullptr;
+
+    auto compute_hover_selectors_match_state = [&] {
+        Vector<AK::Bitmap> state;
+        state.resize(elements.size());
+        for (size_t element_index = 0; element_index < elements.size(); ++element_index) {
+            auto const& element = elements[element_index];
+            state[element_index] = MUST(AK::Bitmap::create(hover_rules.size(), 0));
+            for (size_t rule_index = 0; rule_index < hover_rules.size(); ++rule_index) {
+                auto const& rule = hover_rules[rule_index];
+
+                auto rule_root = rule.shadow_root;
+                auto from_user_agent_or_user_stylesheet = rule.cascade_origin == CSS::CascadeOrigin::UserAgent || rule.cascade_origin == CSS::CascadeOrigin::User;
+                bool rule_is_relevant_for_current_scope = rule_root == shadow_root
+                    || (element.is_shadow_host() && rule_root == element.shadow_root())
+                    || from_user_agent_or_user_stylesheet;
+                if (!rule_is_relevant_for_current_scope)
+                    continue;
+
+                auto const& selector = rule.absolutized_selectors()[rule.selector_index];
+
+                SelectorEngine::MatchContext context;
+                bool selector_matched = false;
+                if (rule.can_use_fast_matches) {
+                    if (SelectorEngine::fast_matches(selector, element, {}, context))
+                        selector_matched = true;
+                } else {
+                    if (SelectorEngine::matches(selector, element, {}, context, {}))
+                        selector_matched = true;
+                }
+                if (element.has_pseudo_elements()) {
+                    if (SelectorEngine::matches(selector, element, {}, context, CSS::Selector::PseudoElement::Type::Before))
+                        selector_matched = true;
+                    if (SelectorEngine::matches(selector, element, {}, context, CSS::Selector::PseudoElement::Type::After))
+                        selector_matched = true;
+                }
+                if (selector_matched)
+                    state[element_index].set(rule_index, true);
+            }
+        }
+        return state;
+    };
+
+    auto previous_hover_selectors_match_state = compute_hover_selectors_match_state();
+    m_hovered_node = hovered_node;
+    auto new_hover_selectors_match_state = compute_hover_selectors_match_state();
+
+    for (size_t element_index = 0; element_index < elements.size(); ++element_index) {
+        if (previous_hover_selectors_match_state[element_index].view() == new_hover_selectors_match_state[element_index].view())
+            continue;
+
+        elements[element_index].set_needs_style_update(true);
+        elements[element_index].for_each_in_subtree_of_type<Element>([](auto& element) {
+            element.set_needs_inherited_style_update(true);
+            return TraversalDecision::Continue;
+        });
+    }
+}
+
 void Document::set_hovered_node(Node* node)
 {
     if (m_hovered_node.ptr() == node)
         return;
 
     GC::Ptr<Node> old_hovered_node = move(m_hovered_node);
-    m_hovered_node = node;
+    auto* common_ancestor = find_common_ancestor(old_hovered_node, node);
 
-    auto* common_ancestor = find_common_ancestor(old_hovered_node, m_hovered_node);
-    if (common_ancestor)
-        common_ancestor->invalidate_style(StyleInvalidationReason::Hover);
-    else
-        invalidate_style(StyleInvalidationReason::Hover);
+    GC::Ptr<Node> old_hovered_node_root = nullptr;
+    GC::Ptr<Node> new_hovered_node_root = nullptr;
+    if (old_hovered_node)
+        old_hovered_node_root = old_hovered_node->root();
+    if (node)
+        new_hovered_node_root = node->root();
+    if (old_hovered_node_root != new_hovered_node_root) {
+        if (old_hovered_node_root)
+            invalidate_style_for_elements_affected_by_hover_change(*old_hovered_node_root, node);
+        if (new_hovered_node_root) {
+            // invalidate_style_for_elements_affected_by_hover_change changes m_hovered_node, so it has to be
+            // reset back to old node before we do another invalidation pass for different root.
+            m_hovered_node = old_hovered_node;
+            invalidate_style_for_elements_affected_by_hover_change(*new_hovered_node_root, node);
+        }
+    } else {
+        invalidate_style_for_elements_affected_by_hover_change(*common_ancestor, node);
+    }
 
     // https://w3c.github.io/uievents/#mouseout
     if (old_hovered_node && old_hovered_node != m_hovered_node) {
@@ -1631,25 +1866,19 @@ void Document::release_events()
     // Do nothing
 }
 
-Color Document::normal_link_color() const
+Optional<Color> Document::normal_link_color() const
 {
-    if (m_normal_link_color.has_value())
-        return m_normal_link_color.value();
-    return CSS::SystemColor::link_text();
+    return m_normal_link_color;
 }
 
-Color Document::active_link_color() const
+Optional<Color> Document::active_link_color() const
 {
-    if (m_active_link_color.has_value())
-        return m_active_link_color.value();
-    return CSS::SystemColor::active_text();
+    return m_active_link_color;
 }
 
-Color Document::visited_link_color() const
+Optional<Color> Document::visited_link_color() const
 {
-    if (m_visited_link_color.has_value())
-        return m_visited_link_color.value();
-    return CSS::SystemColor::visited_text();
+    return m_visited_link_color;
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#relevant-settings-object
@@ -1936,7 +2165,7 @@ void Document::adopt_node(Node& node)
             if (element.is_custom()) {
                 auto& vm = this->vm();
 
-                GC::MarkedVector<JS::Value> arguments { vm.heap() };
+                GC::RootVector<JS::Value> arguments { vm.heap() };
                 arguments.append(&old_document);
                 arguments.append(this);
 
@@ -2000,11 +2229,6 @@ String const& Document::compat_mode() const
     return css1_compat;
 }
 
-bool Document::is_editable() const
-{
-    return m_editable;
-}
-
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-documentorshadowroot-activeelement
 void Document::update_active_element()
 {
@@ -2060,9 +2284,8 @@ void Document::set_focused_element(Element* element)
     if (auto* invalidation_target = find_common_ancestor(old_focused_element, m_focused_element) ?: this)
         invalidation_target->invalidate_style(StyleInvalidationReason::FocusedElementChange);
 
-    if (m_focused_element) {
+    if (m_focused_element)
         m_focused_element->did_receive_focus();
-    }
 
     if (paintable())
         paintable()->set_needs_display();
@@ -2175,9 +2398,139 @@ Element* Document::find_a_potential_indicated_element(FlyString const& fragment)
     return nullptr;
 }
 
+// https://drafts.csswg.org/css-transitions-2/#event-dispatch
+void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transition)
+{
+    auto previous_phase = transition->previous_phase();
+
+    using Phase = CSS::CSSTransition::Phase;
+    // The transition phase of a transition is initially ‘idle’ and is updated on each
+    // animation frame according to the first matching condition from below:
+    auto transition_phase = Phase::Idle;
+
+    if (!transition->effect()) {
+        // If the transition has no associated effect,
+        if (!transition->current_time().has_value()) {
+            // If the transition has an unresolved current time,
+            //   The transition phase is ‘idle’.
+        } else if (transition->current_time().value() < 0.0) {
+            // If the transition has a current time < 0,
+            //   The transition phase is ‘before’.
+            transition_phase = Phase::Before;
+        } else {
+            // Otherwise,
+            //   The transition phase is ‘after’.
+            transition_phase = Phase::After;
+        }
+    } else if (transition->pending() && (previous_phase == Phase::Idle || previous_phase == Phase::Pending)) {
+        // If the transition has a pending play task or a pending pause task
+        // and its phase was previously ‘idle’ or ‘pending’,
+        //   The transition phase is ‘pending’.
+        transition_phase = Phase::Pending;
+    } else {
+        // Otherwise,
+        //   The transition phase is the phase of its associated effect.
+        transition_phase = Phase(to_underlying(transition->effect()->phase()));
+    }
+
+    enum class Interval : u8 {
+        Start,
+        End,
+        ActiveTime,
+    };
+
+    auto dispatch_event = [&](FlyString const& type, Interval interval) {
+        // The target for a transition event is the transition’s owning element. If there is no owning element,
+        // no transition events are dispatched.
+        if (!transition->effect() || !transition->owning_element())
+            return;
+
+        auto effect = transition->effect();
+
+        double elapsed_time = [&]() {
+            if (interval == Interval::Start)
+                return max(min(-effect->start_delay(), effect->active_duration()), 0) / 1000;
+            if (interval == Interval::End)
+                return max(min(transition->associated_effect_end() - effect->start_delay(), effect->active_duration()), 0) / 1000;
+            if (interval == Interval::ActiveTime) {
+                // The active time of the animation at the moment it was canceled calculated using a fill mode of both.
+                // FIXME: Compute this properly.
+                return 0.0;
+            }
+            VERIFY_NOT_REACHED();
+        }();
+
+        append_pending_animation_event({
+            .event = CSS::TransitionEvent::create(
+                transition->owning_element()->realm(),
+                type,
+                CSS::TransitionEventInit {
+                    { .bubbles = true },
+                    // FIXME: Correctly set property_name and pseudo_element
+                    String {},
+                    elapsed_time,
+                    String {},
+                }),
+            .animation = transition,
+            .target = *transition->owning_element(),
+            .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
+        });
+    };
+
+    if (previous_phase == Phase::Idle) {
+        if (transition_phase == Phase::Pending || transition_phase == Phase::Before)
+            dispatch_event(HTML::EventNames::transitionrun, Interval::Start);
+
+        if (transition_phase == Phase::Active) {
+            dispatch_event(HTML::EventNames::transitionrun, Interval::Start);
+            dispatch_event(HTML::EventNames::transitionstart, Interval::Start);
+        }
+
+        if (transition_phase == Phase::After) {
+            dispatch_event(HTML::EventNames::transitionrun, Interval::Start);
+            dispatch_event(HTML::EventNames::transitionstart, Interval::Start);
+            dispatch_event(HTML::EventNames::transitionend, Interval::End);
+        }
+    } else if (previous_phase == Phase::Pending || previous_phase == Phase::Before) {
+        if (transition_phase == Phase::Active)
+            dispatch_event(HTML::EventNames::transitionstart, Interval::Start);
+
+        if (transition_phase == Phase::After) {
+            dispatch_event(HTML::EventNames::transitionstart, Interval::Start);
+            dispatch_event(HTML::EventNames::transitionend, Interval::End);
+        }
+    } else if (previous_phase == Phase::Active) {
+        if (transition_phase == Phase::After)
+            dispatch_event(HTML::EventNames::transitionend, Interval::End);
+
+        if (transition_phase == Phase::Before)
+            dispatch_event(HTML::EventNames::transitionend, Interval::Start);
+    } else if (previous_phase == Phase::After) {
+        if (transition_phase == Phase::Active)
+            dispatch_event(HTML::EventNames::transitionstart, Interval::End);
+
+        if (transition_phase == Phase::Before) {
+            dispatch_event(HTML::EventNames::transitionstart, Interval::End);
+            dispatch_event(HTML::EventNames::transitionend, Interval::Start);
+        }
+    }
+
+    if (transition_phase == Phase::Idle) {
+        if (previous_phase != Phase::Idle && previous_phase != Phase::After)
+            dispatch_event(HTML::EventNames::animationstart, Interval::ActiveTime);
+    }
+
+    transition->set_previous_phase(transition_phase);
+}
+
 // https://www.w3.org/TR/css-animations-2/#event-dispatch
 void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::Animation> animation)
 {
+    if (animation->is_css_transition()) {
+        dispatch_events_for_transition(verify_cast<CSS::CSSTransition>(*animation));
+        return;
+    }
+
     // Each time a new animation frame is established and the animation does not have a pending play task or pending
     // pause task, the events to dispatch are determined by comparing the animation’s phase before and after
     // establishing the new animation frame as follows:
@@ -2198,85 +2551,86 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
     auto current_phase = effect->phase();
     auto current_iteration = effect->current_iteration().value_or(0.0);
 
-    if (previous_phase != current_phase) {
-        auto owning_element = css_animation.owning_element();
+    auto owning_element = css_animation.owning_element();
 
-        auto dispatch_event = [&](FlyString const& name, double elapsed_time) {
-            append_pending_animation_event({
-                .event = CSS::AnimationEvent::create(
-                    owning_element->realm(),
-                    name,
-                    {
-                        { .bubbles = true },
-                        css_animation.id(),
-                        elapsed_time,
-                    }),
-                .animation = css_animation,
-                .target = *target,
-                .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
-            });
-        };
+    auto dispatch_event = [&](FlyString const& name, double elapsed_time_ms) {
+        auto elapsed_time_seconds = elapsed_time_ms / 1000;
 
-        // For calculating the elapsedTime of each event, the following definitions are used:
+        append_pending_animation_event({
+            .event = CSS::AnimationEvent::create(
+                owning_element->realm(),
+                name,
+                {
+                    { .bubbles = true },
+                    css_animation.id(),
+                    elapsed_time_seconds,
+                }),
+            .animation = css_animation,
+            .target = *target,
+            .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
+        });
+    };
 
-        // - interval start = max(min(-start delay, active duration), 0)
-        auto interval_start = max(min(-effect->start_delay(), effect->active_duration()), 0.0);
+    // For calculating the elapsedTime of each event, the following definitions are used:
 
-        // - interval end = max(min(associated effect end - start delay, active duration), 0)
-        auto interval_end = max(min(effect->end_time() - effect->start_delay(), effect->active_duration()), 0.0);
+    // - interval start = max(min(-start delay, active duration), 0)
+    auto interval_start = max(min(-effect->start_delay(), effect->active_duration()), 0.0);
 
-        switch (previous_phase) {
-        case Animations::AnimationEffect::Phase::Before:
-            [[fallthrough]];
-        case Animations::AnimationEffect::Phase::Idle:
-            if (current_phase == Animations::AnimationEffect::Phase::Active) {
-                dispatch_event(HTML::EventNames::animationstart, interval_start);
-            } else if (current_phase == Animations::AnimationEffect::Phase::After) {
-                dispatch_event(HTML::EventNames::animationstart, interval_start);
-                dispatch_event(HTML::EventNames::animationend, interval_end);
-            }
-            break;
-        case Animations::AnimationEffect::Phase::Active:
-            if (current_phase == Animations::AnimationEffect::Phase::Before) {
-                dispatch_event(HTML::EventNames::animationend, interval_start);
-            } else if (current_phase == Animations::AnimationEffect::Phase::Active) {
-                auto previous_current_iteration = effect->previous_current_iteration();
-                if (previous_current_iteration != current_iteration) {
-                    // The elapsed time for an animationiteration event is defined as follows:
+    // - interval end = max(min(associated effect end - start delay, active duration), 0)
+    auto interval_end = max(min(effect->end_time() - effect->start_delay(), effect->active_duration()), 0.0);
 
-                    // 1. Let previous current iteration be the current iteration from the previous animation frame.
-
-                    // 2. If previous current iteration is greater than current iteration, let iteration boundary be current iteration + 1,
-                    //    otherwise let it be current iteration.
-                    auto iteration_boundary = previous_current_iteration > current_iteration ? current_iteration + 1 : current_iteration;
-
-                    // 3. The elapsed time is the result of evaluating (iteration boundary - iteration start) × iteration duration).
-                    auto iteration_duration_variant = effect->iteration_duration();
-                    auto iteration_duration = iteration_duration_variant.has<String>() ? 0.0 : iteration_duration_variant.get<double>();
-                    auto elapsed_time = (iteration_boundary - effect->iteration_start()) * iteration_duration;
-
-                    dispatch_event(HTML::EventNames::animationiteration, elapsed_time);
-                }
-            } else if (current_phase == Animations::AnimationEffect::Phase::After) {
-                dispatch_event(HTML::EventNames::animationend, interval_end);
-            }
-            break;
-        case Animations::AnimationEffect::Phase::After:
-            if (current_phase == Animations::AnimationEffect::Phase::Active) {
-                dispatch_event(HTML::EventNames::animationstart, interval_end);
-            } else if (current_phase == Animations::AnimationEffect::Phase::Before) {
-                dispatch_event(HTML::EventNames::animationstart, interval_end);
-                dispatch_event(HTML::EventNames::animationend, interval_start);
-            }
-            break;
+    switch (previous_phase) {
+    case Animations::AnimationEffect::Phase::Before:
+        [[fallthrough]];
+    case Animations::AnimationEffect::Phase::Idle:
+        if (current_phase == Animations::AnimationEffect::Phase::Active) {
+            dispatch_event(HTML::EventNames::animationstart, interval_start);
+        } else if (current_phase == Animations::AnimationEffect::Phase::After) {
+            dispatch_event(HTML::EventNames::animationstart, interval_start);
+            dispatch_event(HTML::EventNames::animationend, interval_end);
         }
+        break;
+    case Animations::AnimationEffect::Phase::Active:
+        if (current_phase == Animations::AnimationEffect::Phase::Before) {
+            dispatch_event(HTML::EventNames::animationend, interval_start);
+        } else if (current_phase == Animations::AnimationEffect::Phase::Active) {
+            auto previous_current_iteration = effect->previous_current_iteration();
+            if (previous_current_iteration != current_iteration) {
+                // The elapsed time for an animationiteration event is defined as follows:
 
-        if (current_phase == Animations::AnimationEffect::Phase::Idle && previous_phase != Animations::AnimationEffect::Phase::Idle && previous_phase != Animations::AnimationEffect::Phase::After) {
-            // FIXME: Calculate a non-zero time when the animation is cancelled by means other than calling cancel()
-            auto cancel_time = animation->release_saved_cancel_time().value_or(0.0);
-            dispatch_event(HTML::EventNames::animationcancel, cancel_time);
+                // 1. Let previous current iteration be the current iteration from the previous animation frame.
+
+                // 2. If previous current iteration is greater than current iteration, let iteration boundary be current iteration + 1,
+                //    otherwise let it be current iteration.
+                auto iteration_boundary = previous_current_iteration > current_iteration ? current_iteration + 1 : current_iteration;
+
+                // 3. The elapsed time is the result of evaluating (iteration boundary - iteration start) × iteration duration).
+                auto iteration_duration_variant = effect->iteration_duration();
+                auto iteration_duration = iteration_duration_variant.has<String>() ? 0.0 : iteration_duration_variant.get<double>();
+                auto elapsed_time = (iteration_boundary - effect->iteration_start()) * iteration_duration;
+
+                dispatch_event(HTML::EventNames::animationiteration, elapsed_time);
+            }
+        } else if (current_phase == Animations::AnimationEffect::Phase::After) {
+            dispatch_event(HTML::EventNames::animationend, interval_end);
         }
+        break;
+    case Animations::AnimationEffect::Phase::After:
+        if (current_phase == Animations::AnimationEffect::Phase::Active) {
+            dispatch_event(HTML::EventNames::animationstart, interval_end);
+        } else if (current_phase == Animations::AnimationEffect::Phase::Before) {
+            dispatch_event(HTML::EventNames::animationstart, interval_end);
+            dispatch_event(HTML::EventNames::animationend, interval_start);
+        }
+        break;
     }
+
+    if (current_phase == Animations::AnimationEffect::Phase::Idle && previous_phase != Animations::AnimationEffect::Phase::Idle && previous_phase != Animations::AnimationEffect::Phase::After) {
+        // FIXME: Calculate a non-zero time when the animation is cancelled by means other than calling cancel()
+        auto cancel_time = animation->release_saved_cancel_time().value_or(0.0);
+        dispatch_event(HTML::EventNames::animationcancel, cancel_time);
+    }
+
     effect->set_previous_phase(current_phase);
     effect->set_previous_current_iteration(current_iteration);
 }
@@ -2415,10 +2769,10 @@ void Document::update_readiness(HTML::DocumentReadyState readiness_value)
         }
     }
 
-    for (auto document_observer : m_document_observers) {
-        if (document_observer->document_readiness_observer())
-            document_observer->document_readiness_observer()->function()(m_readiness);
-    }
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_readiness_observer();
+    },
+        m_readiness);
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-document-lastmodified
@@ -2482,11 +2836,9 @@ void Document::completely_finish_loading()
         return;
 
     ScopeGuard notify_observers = [this] {
-        auto observers_to_notify = m_document_observers.values();
-        for (auto& document_observer : observers_to_notify) {
-            if (document_observer->document_completely_loaded())
-                document_observer->document_completely_loaded()->function()();
-        }
+        notify_each_document_observer([&](auto const& document_observer) {
+            return document_observer.document_completely_loaded();
+        });
     };
 
     // 1. Assert: document's browsing context is non-null.
@@ -2752,10 +3104,10 @@ void Document::update_the_visibility_state(HTML::VisibilityState visibility_stat
     m_visibility_state = visibility_state;
 
     // 3. Run any page visibility change steps which may be defined in other specifications, with visibility state and document.
-    for (auto document_observer : m_document_observers) {
-        if (document_observer->document_visibility_state_observer())
-            document_observer->document_visibility_state_observer()->function()(m_visibility_state);
-    }
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_visibility_state_observer();
+    },
+        m_visibility_state);
 
     // 4. Fire an event named visibilitychange at document, with its bubbles attribute initialized to true.
     auto event = DOM::Event::create(realm(), HTML::EventNames::visibilitychange);
@@ -2995,13 +3347,13 @@ WebIDL::ExceptionOr<Document::PrefixAndTagName> Document::validate_qualified_nam
 // https://dom.spec.whatwg.org/#dom-document-createnodeiterator
 GC::Ref<NodeIterator> Document::create_node_iterator(Node& root, unsigned what_to_show, GC::Ptr<NodeFilter> filter)
 {
-    return NodeIterator::create(root, what_to_show, filter).release_value_but_fixme_should_propagate_errors();
+    return NodeIterator::create(realm(), root, what_to_show, filter);
 }
 
 // https://dom.spec.whatwg.org/#dom-document-createtreewalker
 GC::Ref<TreeWalker> Document::create_tree_walker(Node& root, unsigned what_to_show, GC::Ptr<NodeFilter> filter)
 {
-    return TreeWalker::create(root, what_to_show, filter);
+    return TreeWalker::create(realm(), root, what_to_show, filter);
 }
 
 void Document::register_node_iterator(Badge<NodeIterator>, NodeIterator& node_iterator)
@@ -3065,10 +3417,10 @@ void Document::set_page_showing(bool page_showing)
 
     m_page_showing = page_showing;
 
-    for (auto document_observer : m_document_observers) {
-        if (document_observer->document_page_showing_observer())
-            document_observer->document_page_showing_observer()->function()(m_page_showing);
-    }
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_page_showing_observer();
+    },
+        m_page_showing);
 }
 
 void Document::invalidate_stacking_context_tree()
@@ -3132,31 +3484,31 @@ void Document::set_window(HTML::Window& window)
 // https://html.spec.whatwg.org/multipage/custom-elements.html#look-up-a-custom-element-definition
 GC::Ptr<HTML::CustomElementDefinition> Document::lookup_custom_element_definition(Optional<FlyString> const& namespace_, FlyString const& local_name, Optional<String> const& is) const
 {
-    // 1. If namespace is not the HTML namespace, return null.
+    // 1. If namespace is not the HTML namespace, then return null.
     if (namespace_ != Namespace::HTML)
         return nullptr;
 
-    // 2. If document's browsing context is null, return null.
+    // 2. If document's browsing context is null, then return null.
     if (!browsing_context())
         return nullptr;
 
-    // 3. Let registry be document's relevant global object's CustomElementRegistry object.
+    // 3. Let registry be document's relevant global object's custom element registry.
     auto registry = verify_cast<HTML::Window>(relevant_global_object(*this)).custom_elements();
 
-    // 4. If there is custom element definition in registry with name and local name both equal to localName, return that custom element definition.
-    auto converted_local_name = local_name;
-    auto maybe_definition = registry->get_definition_with_name_and_local_name(converted_local_name.to_string(), converted_local_name.to_string());
+    // 4. If registry's custom element definition set contains an item with name and local name both equal to localName, then return that item.
+    auto converted_local_name = local_name.to_string();
+    auto maybe_definition = registry->get_definition_with_name_and_local_name(converted_local_name, converted_local_name);
     if (maybe_definition)
         return maybe_definition;
 
-    // 5. If there is a custom element definition in registry with name equal to is and local name equal to localName, return that custom element definition.
+    // 5. If registry's custom element definition set contains an item with name equal to is and local name equal to localName, then return that item.
     // 6. Return null.
 
     // NOTE: If `is` has no value, it can never match as custom element definitions always have a name and localName (i.e. not stored as Optional<String>)
     if (!is.has_value())
         return nullptr;
 
-    return registry->get_definition_with_name_and_local_name(is.value(), converted_local_name.to_string());
+    return registry->get_definition_with_name_and_local_name(is.value(), converted_local_name);
 }
 
 CSS::StyleSheetList& Document::style_sheets()
@@ -3470,7 +3822,7 @@ void Document::destroy_a_document_and_its_descendants(GC::Ptr<GC::Function<void(
     }
 
     // 2. Let childNavigables be document's child navigables.
-    auto child_navigables = document_tree_child_navigables();
+    IGNORE_USE_IN_ESCAPING_LAMBDA auto child_navigables = document_tree_child_navigables();
 
     // 3. Let numberDestroyed be 0.
     IGNORE_USE_IN_ESCAPING_LAMBDA size_t number_destroyed = 0;
@@ -3598,7 +3950,7 @@ void Document::unload(GC::Ptr<Document>)
     auto intend_to_store_in_bfcache = false;
 
     // 6. Let eventLoop be oldDocument's relevant agent's event loop.
-    auto& event_loop = *verify_cast<Bindings::WebEngineCustomData>(*HTML::relevant_agent(*this).custom_data()).event_loop;
+    auto& event_loop = *HTML::relevant_agent(*this).event_loop;
 
     // 7. Increase eventLoop's termination nesting level by 1.
     event_loop.increment_termination_nesting_level();
@@ -3698,7 +4050,7 @@ void Document::unload_a_document_and_its_descendants(GC::Ptr<Document> new_docum
             descendant_navigables.append(other_navigable);
     }
 
-    auto unloaded_documents_count = descendant_navigables.size() + 1;
+    IGNORE_USE_IN_ESCAPING_LAMBDA auto unloaded_documents_count = descendant_navigables.size() + 1;
 
     HTML::queue_global_task(HTML::Task::Source::NavigationAndTraversal, HTML::relevant_global_object(*this), GC::create_function(heap(), [&number_unloaded, this, new_document] {
         unload(new_document);
@@ -3748,11 +4100,9 @@ void Document::did_stop_being_active_document_in_navigable()
 {
     tear_down_layout_tree();
 
-    auto observers_to_notify = m_document_observers.values();
-    for (auto& document_observer : observers_to_notify) {
-        if (document_observer->document_became_inactive())
-            document_observer->document_became_inactive()->function()();
-    }
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_became_inactive();
+    });
 
     if (m_animation_driver_timer)
         m_animation_driver_timer->stop();
@@ -3865,6 +4215,10 @@ void Document::make_active()
         navigable()->traversable_navigable()->page().client().page_did_finish_loading(url());
         m_needs_to_call_page_did_load = false;
     }
+
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_became_active();
+    });
 }
 
 HTML::ListOfAvailableImages& Document::list_of_available_images()
@@ -3983,9 +4337,8 @@ void Document::queue_intersection_observer_task()
             auto& callback = observer->callback();
 
             // 5. Invoke callback with queue as the first argument, observer as the second argument, and observer as the callback this value. If this throws an exception, report the exception.
-            auto completion = WebIDL::invoke_callback(callback, observer.ptr(), wrapped_queue, observer.ptr());
-            if (completion.is_abrupt())
-                HTML::report_exception(completion, realm);
+            // NOTE: This does not follow the spec as written precisely, but this is the same thing we do elsewhere and there is a WPT test that relies on this.
+            (void)WebIDL::invoke_callback(callback, observer.ptr(), WebIDL::ExceptionBehavior::Report, wrapped_queue, observer.ptr());
         }
     }));
 }
@@ -4048,7 +4401,7 @@ void Document::run_the_update_intersection_observations_steps(HighResolutionTime
     // 2. For each observer in observer list:
 
     // NOTE: We make a copy of the intersection observers list to avoid modifying it while iterating.
-    GC::MarkedVector<GC::Ref<IntersectionObserver::IntersectionObserver>> intersection_observers(heap());
+    GC::RootVector<GC::Ref<IntersectionObserver::IntersectionObserver>> intersection_observers(heap());
     intersection_observers.ensure_capacity(m_intersection_observers.size());
     for (auto& observer : m_intersection_observers)
         intersection_observers.append(observer);
@@ -4190,15 +4543,10 @@ void Document::start_intersection_observing_a_lazy_loading_element(Element& elem
                 }
 
                 // 4. Stop intersection-observing a lazy loading element for entry.target.
-                // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#stop-intersection-observing-a-lazy-loading-element
-                // 1. Let doc be element's node document.
-                // NOTE: It's `this`.
+                stop_intersection_observing_a_lazy_loading_element(entry.target());
 
-                // 2. Assert: doc's lazy load intersection observer is not null.
-                VERIFY(m_lazy_load_intersection_observer);
-
-                // 3. Call doc's lazy load intersection observer unobserve method with element as the argument.
-                m_lazy_load_intersection_observer->unobserve(entry.target());
+                // 5. Set entry.target's lazy load resumption steps to null.
+                entry.target()->take_lazy_load_resumption_steps({});
 
                 // 6. Invoke resumptionSteps.
                 resumption_steps->function()();
@@ -4218,6 +4566,19 @@ void Document::start_intersection_observing_a_lazy_loading_element(Element& elem
     // 3. Call doc's lazy load intersection observer's observe method with element as the argument.
     VERIFY(m_lazy_load_intersection_observer);
     m_lazy_load_intersection_observer->observe(element);
+}
+
+// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#stop-intersection-observing-a-lazy-loading-element
+void Document::stop_intersection_observing_a_lazy_loading_element(Element& element)
+{
+    // 1. Let doc be element's node document.
+    // NOTE: It's `this`.
+
+    // 2. Assert: doc's lazy load intersection observer is not null.
+    VERIFY(m_lazy_load_intersection_observer);
+
+    // 3. Call doc's lazy load intersection observer unobserve method with element as the argument.
+    m_lazy_load_intersection_observer->unobserve(element);
 }
 
 // https://html.spec.whatwg.org/multipage/semantics.html#shared-declarative-refresh-steps
@@ -4575,11 +4936,18 @@ void Document::update_animations_and_send_events(Optional<double> const& timesta
     HTML::perform_a_microtask_checkpoint();
 
     // 4. Let events to dispatch be a copy of doc’s pending animation event queue.
+    auto events_to_dispatch = GC::ConservativeVector<Document::PendingAnimationEvent> { vm().heap() };
+    events_to_dispatch.extend(m_pending_animation_event_queue);
+
     // 5. Clear doc’s pending animation event queue.
-    auto events_to_dispatch = move(m_pending_animation_event_queue);
+    m_pending_animation_event_queue.clear();
 
     // 6. Perform a stable sort of the animation events in events to dispatch as follows:
     auto sort_events_by_composite_order = [](auto const& a, auto const& b) {
+        if (!a.animation->effect())
+            return true;
+        if (!b.animation->effect())
+            return false;
         auto& a_effect = verify_cast<Animations::KeyframeEffect>(*a.animation->effect());
         auto& b_effect = verify_cast<Animations::KeyframeEffect>(*b.animation->effect());
         return Animations::KeyframeEffect::composite_order(a_effect, b_effect) < 0;
@@ -4898,10 +5266,10 @@ Element const* Document::element_from_point(double x, double y)
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-document-elementsfrompoint
-GC::MarkedVector<GC::Ref<Element>> Document::elements_from_point(double x, double y)
+GC::RootVector<GC::Ref<Element>> Document::elements_from_point(double x, double y)
 {
     // 1. Let sequence be a new empty sequence.
-    GC::MarkedVector<GC::Ref<Element>> sequence(heap());
+    GC::RootVector<GC::Ref<Element>> sequence(heap());
 
     // 2. If either argument is negative, x is greater than the viewport width excluding the size of a rendered scroll bar (if any),
     //    or y is greater than the viewport height excluding the size of a rendered scroll bar (if any),
@@ -5128,7 +5496,7 @@ size_t Document::broadcast_active_resize_observations()
     // 2. For each observer in document.[[resizeObservers]] run these steps:
 
     // NOTE: We make a copy of the resize observers list to avoid modifying it while iterating.
-    GC::MarkedVector<GC::Ref<ResizeObserver::ResizeObserver>> resize_observers(heap());
+    GC::RootVector<GC::Ref<ResizeObserver::ResizeObserver>> resize_observers(heap());
     resize_observers.ensure_capacity(m_resize_observers.size());
     for (auto const& observer : m_resize_observers)
         resize_observers.append(observer);
@@ -5140,7 +5508,7 @@ size_t Document::broadcast_active_resize_observations()
         }
 
         // 2. Let entries be an empty list of ResizeObserverEntryies.
-        GC::MarkedVector<GC::Ref<ResizeObserver::ResizeObserverEntry>> entries(heap());
+        GC::RootVector<GC::Ref<ResizeObserver::ResizeObserverEntry>> entries(heap());
 
         // 3. For each observation in [[activeTargets]] perform these steps:
         for (auto const& observation : observer->active_targets()) {
@@ -5538,7 +5906,7 @@ InputEventsTarget* Document::active_input_events_target()
         return static_cast<HTML::HTMLInputElement*>(focused_element);
     if (is<HTML::HTMLTextAreaElement>(*focused_element))
         return static_cast<HTML::HTMLTextAreaElement*>(focused_element);
-    if (is<HTML::HTMLElement>(*focused_element) && static_cast<HTML::HTMLElement*>(focused_element)->is_editable())
+    if (focused_element->is_editable_or_editing_host())
         return m_editing_host_manager;
     return nullptr;
 }
@@ -5546,9 +5914,8 @@ InputEventsTarget* Document::active_input_events_target()
 GC::Ptr<DOM::Position> Document::cursor_position() const
 {
     auto const* focused_element = this->focused_element();
-    if (!focused_element) {
+    if (!focused_element)
         return nullptr;
-    }
 
     Optional<HTML::FormAssociatedTextControlElement const&> target {};
     if (is<HTML::HTMLInputElement>(*focused_element))
@@ -5556,13 +5923,11 @@ GC::Ptr<DOM::Position> Document::cursor_position() const
     else if (is<HTML::HTMLTextAreaElement>(*focused_element))
         target = static_cast<HTML::HTMLTextAreaElement const&>(*focused_element);
 
-    if (target.has_value()) {
+    if (target.has_value())
         return target->cursor_position();
-    }
 
-    if (is<HTML::HTMLElement>(*focused_element) && static_cast<HTML::HTMLElement const*>(focused_element)->is_editable()) {
+    if (focused_element->is_editable_or_editing_host())
         return m_selection->cursor_position();
-    }
 
     return nullptr;
 }
@@ -5571,6 +5936,18 @@ void Document::reset_cursor_blink_cycle()
 {
     m_cursor_blink_state = true;
     m_cursor_blink_timer->restart();
+}
+
+// https://html.spec.whatwg.org/multipage/document-sequences.html#doc-container-document
+GC::Ptr<DOM::Document> Document::container_document() const
+{
+    // 1. If document's node navigable is null, then return null.
+    auto node_navigable = navigable();
+    if (!node_navigable)
+        return nullptr;
+
+    // 2. Return document's node navigable's container document.
+    return node_navigable->container_document();
 }
 
 GC::Ptr<HTML::Navigable> Document::cached_navigable()
@@ -5634,12 +6011,37 @@ RefPtr<Painting::DisplayList> Document::record_display_list(PaintConfig config)
     auto display_list = Painting::DisplayList::create();
     Painting::DisplayListRecorder display_list_recorder(display_list);
 
+    // https://drafts.csswg.org/css-color-adjust-1/#color-scheme-effect
+    // On the root element, the used color scheme additionally must affect the surface color of the canvas, and the viewport’s scrollbars.
+    auto color_scheme = CSS::PreferredColorScheme::Light;
+    if (auto* html_element = this->html_element(); html_element && html_element->layout_node()) {
+        if (html_element->layout_node()->computed_values().color_scheme() == CSS::PreferredColorScheme::Dark)
+            color_scheme = CSS::PreferredColorScheme::Dark;
+    }
+
+    // .. in the case of embedded documents typically rendered over a transparent canvas
+    // (such as provided via an HTML iframe element), if the used color scheme of the element
+    // and the used color scheme of the embedded document’s root element do not match,
+    // then the UA must use an opaque canvas of the Canvas color appropriate to the
+    // embedded document’s used color scheme instead of a transparent canvas.
+    bool opaque_canvas = false;
+    if (auto container_element = navigable()->container(); container_element && container_element->layout_node()) {
+        auto container_scheme = container_element->layout_node()->computed_values().color_scheme();
+        if (container_scheme == CSS::PreferredColorScheme::Auto)
+            container_scheme = CSS::PreferredColorScheme::Light;
+
+        opaque_canvas = container_scheme != color_scheme;
+    }
+
     if (config.canvas_fill_rect.has_value()) {
-        display_list_recorder.fill_rect(config.canvas_fill_rect.value(), CSS::SystemColor::canvas());
+        display_list_recorder.fill_rect(config.canvas_fill_rect.value(), CSS::SystemColor::canvas(color_scheme));
     }
 
     auto viewport_rect = page().css_to_device_rect(this->viewport_rect());
     Gfx::IntRect bitmap_rect { {}, viewport_rect.size().to_type<int>() };
+
+    if (opaque_canvas)
+        display_list_recorder.fill_rect(bitmap_rect, CSS::SystemColor::canvas(color_scheme));
 
     display_list_recorder.fill_rect(bitmap_rect, background_color());
     if (!paintable()) {
@@ -5695,7 +6097,7 @@ Document::StepsToFireBeforeunloadResult Document::steps_to_fire_beforeunload(boo
     m_unload_counter++;
 
     // 3. Increase document's relevant agent's event loop's termination nesting level by 1.
-    auto& event_loop = *verify_cast<Bindings::WebEngineCustomData>(*HTML::relevant_agent(*this).custom_data()).event_loop;
+    auto& event_loop = *HTML::relevant_agent(*this).event_loop;
     event_loop.increment_termination_nesting_level();
 
     // 4. Let eventFiringResult be the result of firing an event named beforeunload at document's relevant global object,

@@ -82,38 +82,49 @@ void HTMLImageElement::visit_edges(Cell::Visitor& visitor)
     visit_lazy_loading_element(visitor);
 }
 
-void HTMLImageElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLImageElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::hspace,
+        HTML::AttributeNames::vspace,
+        HTML::AttributeNames::border);
+}
+
+void HTMLImageElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         if (name == HTML::AttributeNames::hspace) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::MarginLeft, *parsed_value);
-                style.set_property(CSS::PropertyID::MarginRight, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, *parsed_value);
             }
         } else if (name == HTML::AttributeNames::vspace) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::MarginTop, *parsed_value);
-                style.set_property(CSS::PropertyID::MarginBottom, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginTop, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginBottom, *parsed_value);
             }
         } else if (name == HTML::AttributeNames::border) {
             if (auto parsed_value = parse_non_negative_integer(value); parsed_value.has_value()) {
                 auto width_value = CSS::LengthStyleValue::create(CSS::Length::make_px(*parsed_value));
-                style.set_property(CSS::PropertyID::BorderTopWidth, width_value);
-                style.set_property(CSS::PropertyID::BorderRightWidth, width_value);
-                style.set_property(CSS::PropertyID::BorderBottomWidth, width_value);
-                style.set_property(CSS::PropertyID::BorderLeftWidth, width_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopWidth, width_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightWidth, width_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomWidth, width_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftWidth, width_value);
 
                 auto solid_value = CSS::CSSKeywordValue::create(CSS::Keyword::Solid);
-                style.set_property(CSS::PropertyID::BorderTopStyle, solid_value);
-                style.set_property(CSS::PropertyID::BorderRightStyle, solid_value);
-                style.set_property(CSS::PropertyID::BorderBottomStyle, solid_value);
-                style.set_property(CSS::PropertyID::BorderLeftStyle, solid_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopStyle, solid_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightStyle, solid_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomStyle, solid_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftStyle, solid_value);
             }
         }
     });
 }
 
-void HTMLImageElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value)
+void HTMLImageElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value, Optional<FlyString> const&)
 {
     if (name == HTML::AttributeNames::crossorigin) {
         m_cors_setting = cors_setting_attribute_from_keyword(value);
@@ -134,12 +145,12 @@ void HTMLImageElement::form_associated_element_attribute_changed(FlyString const
     }
 }
 
-GC::Ptr<Layout::Node> HTMLImageElement::create_layout_node(CSS::StyleProperties style)
+GC::Ptr<Layout::Node> HTMLImageElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
 {
     return heap().allocate<Layout::ImageBox>(document(), *this, move(style), *this);
 }
 
-void HTMLImageElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLImageElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())
@@ -352,9 +363,9 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> HTMLImageElement::decode() const
 
         // 3. Otherwise, in parallel wait for one of the following cases to occur, and perform the corresponding actions:
         Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(heap(), [this, promise, &realm, &global] {
-            Platform::EventLoopPlugin::the().spin_until(GC::create_function(heap(), [&] {
-                auto queue_reject_task = [&](String const& message) {
-                    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(realm.heap(), [&realm, &promise, &message] {
+            Platform::EventLoopPlugin::the().spin_until(GC::create_function(heap(), [this, promise, &realm, &global] {
+                auto queue_reject_task = [promise, &realm, &global](String const& message) {
+                    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(realm.heap(), [&realm, promise, message = String(message)] {
                         auto exception = WebIDL::EncodingError::create(realm, message);
                         HTML::TemporaryExecutionContext context(realm);
                         WebIDL::reject_promise(realm, promise, exception);
@@ -391,7 +402,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> HTMLImageElement::decode() const
                     // FIXME: If decoding fails (for example due to invalid image data), then queue a global task on the DOM manipulation task source with global to reject promise with an "EncodingError" DOMException.
 
                     // NOTE: For now we just resolve it.
-                    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(realm.heap(), [&realm, &promise] {
+                    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(realm.heap(), [&realm, promise] {
                         HTML::TemporaryExecutionContext context(realm);
                         WebIDL::resolve_promise(realm, promise, JS::js_undefined());
                     }));
@@ -411,10 +422,15 @@ Optional<ARIA::Role> HTMLImageElement::default_role() const
 {
     // https://www.w3.org/TR/html-aria/#el-img
     // https://www.w3.org/TR/html-aria/#el-img-no-alt
+    // https://w3c.github.io/aria/#image
+    // NOTE: The "image" role value is a synonym for the older "img" role value; however, the el-img test in
+    //       https://wpt.fyi/results/html-aam/roles.html expects the value to be "image" (not "img").
     if (!alt().is_empty())
-        return ARIA::Role::img;
+        return ARIA::Role::image;
     // https://www.w3.org/TR/html-aria/#el-img-empty-alt
-    return ARIA::Role::presentation;
+    // NOTE: The "none" role value is a synonym for the older "presentation" role value; however, the el-img-alt-no-value
+    //       test in https://wpt.fyi/results/html-aam/roles.html expects the value to be "none" (not "presentation").
+    return ARIA::Role::none;
 }
 
 // https://html.spec.whatwg.org/multipage/images.html#use-srcset-or-picture
@@ -1021,7 +1037,7 @@ static void update_the_source_set(DOM::Element& element)
         TODO();
 
     // 2. Let elements be « el ».
-    GC::MarkedVector<DOM::Element*> elements(element.heap());
+    GC::RootVector<DOM::Element*> elements(element.heap());
     elements.append(&element);
 
     // 3. If el is an img element whose parent node is a picture element,

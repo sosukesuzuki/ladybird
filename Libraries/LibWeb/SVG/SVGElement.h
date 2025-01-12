@@ -25,6 +25,9 @@ public:
     GC::Ref<SVGAnimatedString> class_name();
     GC::Ptr<SVGSVGElement> owner_svg_element();
 
+    bool should_include_in_accessibility_tree() const;
+    virtual Optional<ARIA::Role> default_role() const override;
+
 protected:
     SVGElement(DOM::Document&, DOM::QualifiedName);
 
@@ -32,7 +35,7 @@ protected:
     virtual void visit_edges(Cell::Visitor&) override;
 
     virtual void attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
-    virtual WebIDL::ExceptionOr<void> cloned(DOM::Node&, bool) override;
+    virtual WebIDL::ExceptionOr<void> cloned(DOM::Node&, bool) const override;
     virtual void children_changed() override;
     virtual void inserted() override;
     virtual void removed_from(Node*) override;

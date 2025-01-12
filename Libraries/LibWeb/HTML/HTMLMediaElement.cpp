@@ -187,24 +187,21 @@ Bindings::CanPlayTypeResult HTMLMediaElement::can_play_type(StringView type) con
     auto mime_type = MimeSniff::MimeType::parse(type);
 
     if (mime_type.has_value() && mime_type->type() == "video"sv) {
-        if (mime_type->subtype() == "webm"sv)
+        if (supported_video_subtypes.contains_slow(mime_type->subtype()))
             return Bindings::CanPlayTypeResult::Probably;
         return Bindings::CanPlayTypeResult::Maybe;
     }
 
     if (mime_type.has_value() && mime_type->type() == "audio"sv) {
-        if (mime_type->subtype() == "flac"sv)
-            return Bindings::CanPlayTypeResult::Probably;
-        if (mime_type->subtype() == "mp3"sv)
-            return Bindings::CanPlayTypeResult::Probably;
+        auto result = Bindings::CanPlayTypeResult::Maybe;
+        if (supported_audio_subtypes.contains_slow(mime_type->subtype()))
+            result = Bindings::CanPlayTypeResult::Probably;
+
         // "Maybe" because we support mp3, but "mpeg" can also refer to MP1 and MP2.
         if (mime_type->subtype() == "mpeg"sv)
-            return Bindings::CanPlayTypeResult::Maybe;
-        if (mime_type->subtype() == "ogg"sv)
-            return Bindings::CanPlayTypeResult::Probably;
-        if (mime_type->subtype() == "wav"sv)
-            return Bindings::CanPlayTypeResult::Probably;
-        return Bindings::CanPlayTypeResult::Maybe;
+            result = Bindings::CanPlayTypeResult::Maybe;
+
+        return result;
     }
 
     return Bindings::CanPlayTypeResult::Empty;
@@ -936,17 +933,20 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::fetch_resource(URL::URL const& url_r
     auto& realm = this->realm();
     auto& vm = realm.vm();
 
-    // 1. If the algorithm was invoked with media provider object or a URL record whose blob URL entry is a blob URL entry whose object is a media provider
-    //    object, then let mode be local. Otherwise let mode be remote.
-    // FIXME: Detect media provider object / blob URLs with a media provider object.
+    // 1. Let mode be remote.
     auto mode = FetchMode::Remote;
 
-    // FIXME: 2. If mode is remote, then let the current media resource be the resource given by the URL record passed to this algorithm; otherwise, let the
+    // FIXME: 2. If the algorithm was invoked with media provider object, then set mode to local.
+    //           Otherwise:
+    //           1. Let object be the result of obtaining a blob object using the URL record's blob URL entry and the media
+    //              element's node document's relevant settings object.
+    //           2. If object is a media provider object, then set mode to local.
+    // FIXME: 3. If mode is remote, then let the current media resource be the resource given by the URL record passed to this algorithm; otherwise, let the
     //           current media resource be the resource given by the media provider object. Either way, the current media resource is now the element's media
     //           resource.
-    // FIXME: 3. Remove all media-resource-specific text tracks from the media element's list of pending text tracks, if any.
+    // FIXME: 4. Remove all media-resource-specific text tracks from the media element's list of pending text tracks, if any.
 
-    // 4. Run the appropriate steps from the following list:
+    // 5. Run the appropriate steps from the following list:
     switch (mode) {
     // -> If mode is remote
     case FetchMode::Remote: {
@@ -1042,7 +1042,7 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::fetch_resource(URL::URL const& url_r
             // 5. Otherwise, incrementally read response's body given updateMedia, processEndOfMedia, an empty algorithm, and global.
 
             VERIFY(response->body());
-            auto empty_algorithm = GC::create_function(heap(), [](JS::Value) {});
+            auto empty_algorithm = GC::create_function(heap(), [](JS::Value) { });
 
             // FIXME: We are "fully" reading the response here, rather than "incrementally". Memory concerns aside, this should be okay for now as we are
             //        always setting byteRange to "entire resource". However, we should switch to incremental reads when that is implemented, and then
@@ -1863,12 +1863,12 @@ void HTMLMediaElement::time_marches_on(TimeMarchesOnReason reason)
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#take-pending-play-promises
-GC::MarkedVector<GC::Ref<WebIDL::Promise>> HTMLMediaElement::take_pending_play_promises()
+GC::RootVector<GC::Ref<WebIDL::Promise>> HTMLMediaElement::take_pending_play_promises()
 {
     // 1. Let promises be an empty list of promises.
     // 2. Copy the media element's list of pending play promises to promises.
     // 3. Clear the media element's list of pending play promises.
-    GC::MarkedVector<GC::Ref<WebIDL::Promise>> promises(heap());
+    GC::RootVector<GC::Ref<WebIDL::Promise>> promises(heap());
     promises.extend(move(m_pending_play_promises));
 
     // 4. Return promises.

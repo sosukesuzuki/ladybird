@@ -2,6 +2,7 @@
  * Copyright (c) 2018-2024, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021-2022, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
+ * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -11,7 +12,6 @@
 #include <LibGC/DeferGC.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibRegex/Regex.h>
-#include <LibURL/Origin.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Bindings/NodePrototype.h>
 #include <LibWeb/DOM/Attr.h>
@@ -44,16 +44,18 @@
 #include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
 #include <LibWeb/HTML/HTMLTableElement.h>
+#include <LibWeb/HTML/HTMLTextAreaElement.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/NavigableContainer.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/TextNode.h>
-#include <LibWeb/Layout/Viewport.h>
+#include <LibWeb/MathML/MathMLElement.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/Painting/Paintable.h>
 #include <LibWeb/Painting/PaintableBox.h>
+#include <LibWeb/SVG/SVGElement.h>
 #include <LibWeb/SVG/SVGTitleElement.h>
 #include <LibWeb/XLink/AttributeNames.h>
 
@@ -200,6 +202,10 @@ void Node::set_text_content(Optional<String> const& maybe_content)
 
     // If DocumentFragment or Element, string replace all with the given value within this.
     if (is<DocumentFragment>(this) || is<Element>(this)) {
+        // OPTIMIZATION: Replacing nothing with nothing is a no-op. Avoid all invalidation in this case.
+        if (!first_child() && content.is_empty()) {
+            return;
+        }
         string_replace_all(content);
     }
 
@@ -671,7 +677,7 @@ void Node::insert_before(GC::Ref<Node> node, GC::Ptr<Node> child, bool suppress_
                 // 1. If inclusiveDescendant is custom, then enqueue a custom element callback reaction with inclusiveDescendant,
                 //    callback name "connectedCallback", and an empty argument list.
                 if (element.is_custom()) {
-                    GC::MarkedVector<JS::Value> empty_arguments { vm().heap() };
+                    GC::RootVector<JS::Value> empty_arguments { vm().heap() };
                     element.enqueue_a_custom_element_callback_reaction(HTML::CustomElementReactionNames::connectedCallback, move(empty_arguments));
                 }
 
@@ -689,11 +695,34 @@ void Node::insert_before(GC::Ref<Node> node, GC::Ptr<Node> child, bool suppress_
 
     // 8. If suppress observers flag is unset, then queue a tree mutation record for parent with nodes, « », previousSibling, and child.
     if (!suppress_observers) {
-        queue_tree_mutation_record(move(nodes), {}, previous_sibling.ptr(), child.ptr());
+        queue_tree_mutation_record(nodes, {}, previous_sibling.ptr(), child.ptr());
     }
 
     // 9. Run the children changed steps for parent.
     children_changed();
+
+    // 10. Let staticNodeList be a list of nodes, initially « ».
+    // Spec-Note: We collect all nodes before calling the post-connection steps on any one of them, instead of calling
+    //            the post-connection steps while we’re traversing the node tree. This is because the post-connection
+    //            steps can modify the tree’s structure, making live traversal unsafe, possibly leading to the
+    //            post-connection steps being called multiple times on the same node.
+    GC::RootVector<GC::Ref<Node>> static_node_list(heap());
+
+    // 11. For each node of nodes, in tree order:
+    for (auto& node : nodes) {
+        // 1. For each shadow-including inclusive descendant inclusiveDescendant of node, in shadow-including tree
+        //    order, append inclusiveDescendant to staticNodeList.
+        node->for_each_shadow_including_inclusive_descendant([&static_node_list](Node& inclusive_descendant) {
+            static_node_list.append(inclusive_descendant);
+            return TraversalDecision::Continue;
+        });
+    }
+
+    // 12. For each node of staticNodeList, if node is connected, then run the post-connection steps with node.
+    for (auto& node : static_node_list) {
+        if (node->is_connected())
+            node->post_connection();
+    }
 
     if (is_connected()) {
         // FIXME: This will need to become smarter when we implement the :has() selector.
@@ -857,7 +886,7 @@ void Node::remove(bool suppress_observers)
         auto& element = static_cast<DOM::Element&>(*this);
 
         if (element.is_custom() && is_parent_connected) {
-            GC::MarkedVector<JS::Value> empty_arguments { vm().heap() };
+            GC::RootVector<JS::Value> empty_arguments { vm().heap() };
             element.enqueue_a_custom_element_callback_reaction(HTML::CustomElementReactionNames::disconnectedCallback, move(empty_arguments));
         }
     }
@@ -873,7 +902,7 @@ void Node::remove(bool suppress_observers)
             auto& element = static_cast<DOM::Element&>(descendant);
 
             if (element.is_custom() && is_parent_connected) {
-                GC::MarkedVector<JS::Value> empty_arguments { vm().heap() };
+                GC::RootVector<JS::Value> empty_arguments { vm().heap() };
                 element.enqueue_a_custom_element_callback_reaction(HTML::CustomElementReactionNames::disconnectedCallback, move(empty_arguments));
             }
         }
@@ -1001,150 +1030,207 @@ WebIDL::ExceptionOr<GC::Ref<Node>> Node::replace_child(GC::Ref<Node> node, GC::R
 }
 
 // https://dom.spec.whatwg.org/#concept-node-clone
-WebIDL::ExceptionOr<GC::Ref<Node>> Node::clone_node(Document* document, bool clone_children)
+WebIDL::ExceptionOr<GC::Ref<Node>> Node::clone_node(Document* document, bool subtree, Node* parent) const
 {
-    // 1. If document is not given, let document be node’s node document.
+    // To clone a node given a node node and an optional document document (default node’s node document),
+    // boolean subtree (default false), and node-or-null parent (default null):
     if (!document)
-        document = m_document.ptr();
-    GC::Ptr<Node> copy;
+        document = m_document;
 
-    // 2. If node is an element, then:
-    if (is<Element>(this)) {
-        // 1. Let copy be the result of creating an element, given document, node’s local name, node’s namespace, node’s namespace prefix, and node’s is value, with the synchronous custom elements flag unset.
-        auto& element = *verify_cast<Element>(this);
-        auto element_copy = DOM::create_element(*document, element.local_name(), element.namespace_uri(), element.prefix(), element.is_value(), false).release_value_but_fixme_should_propagate_errors();
+    // 1. Assert: node is not a document or node is document.
+    VERIFY(!is_document() || this == document);
 
-        // 2. For each attribute in node’s attribute list:
-        element.for_each_attribute([&](auto& name, auto& value) {
-            // 1. Let copyAttribute be a clone of attribute.
-            // 2. Append copyAttribute to copy.
-            element_copy->append_attribute(name, value);
-        });
-        copy = move(element_copy);
+    // 2. Let copy be the result of cloning a single node given node and document.
+    auto copy = TRY(clone_single_node(*document));
 
-    }
-    // 3. Otherwise, let copy be a node that implements the same interfaces as node, and fulfills these additional requirements, switching on the interface node implements:
-    else if (is<Document>(this)) {
-        // Document
-        auto document_ = verify_cast<Document>(this);
-        auto document_copy = [&] -> GC::Ref<Document> {
-            switch (document_->document_type()) {
-            case Document::Type::XML:
-                return XMLDocument::create(realm(), document_->url());
-            case Document::Type::HTML:
-                return HTML::HTMLDocument::create(realm(), document_->url());
-            default:
-                return Document::create(realm(), document_->url());
-            }
-        }();
+    // 3. Run any cloning steps defined for node in other applicable specifications and pass node, copy, and subtree as parameters.
+    TRY(cloned(*copy, subtree));
 
-        // Set copy’s encoding, content type, URL, origin, type, and mode to those of node.
-        document_copy->set_encoding(document_->encoding());
-        document_copy->set_content_type(document_->content_type());
-        document_copy->set_url(document_->url());
-        document_copy->set_origin(document_->origin());
-        document_copy->set_document_type(document_->document_type());
-        document_copy->set_quirks_mode(document_->mode());
-        copy = move(document_copy);
-    } else if (is<DocumentType>(this)) {
-        // DocumentType
-        auto document_type = verify_cast<DocumentType>(this);
-        auto document_type_copy = realm().create<DocumentType>(*document);
+    // 4. If parent is non-null, then append copy to parent.
+    if (parent)
+        TRY(parent->append_child(copy));
 
-        // Set copy’s name, public ID, and system ID to those of node.
-        document_type_copy->set_name(document_type->name());
-        document_type_copy->set_public_id(document_type->public_id());
-        document_type_copy->set_system_id(document_type->system_id());
-        copy = move(document_type_copy);
-    } else if (is<Attr>(this)) {
-        // Attr
-        // Set copy’s namespace, namespace prefix, local name, and value to those of node.
-        auto& attr = static_cast<Attr&>(*this);
-        copy = attr.clone(*document);
-    } else if (is<Text>(this)) {
-        // Text
-        auto& text = static_cast<Text&>(*this);
-
-        // Set copy’s data to that of node.
-        copy = [&]() -> GC::Ref<Text> {
-            switch (type()) {
-            case NodeType::TEXT_NODE:
-                return realm().create<Text>(*document, text.data());
-            case NodeType::CDATA_SECTION_NODE:
-                return realm().create<CDATASection>(*document, text.data());
-            default:
-                VERIFY_NOT_REACHED();
-            }
-        }();
-    } else if (is<Comment>(this)) {
-        // Comment
-        auto comment = verify_cast<Comment>(this);
-
-        // Set copy’s data to that of node.
-        auto comment_copy = realm().create<Comment>(*document, comment->data());
-        copy = move(comment_copy);
-    } else if (is<ProcessingInstruction>(this)) {
-        // ProcessingInstruction
-        auto processing_instruction = verify_cast<ProcessingInstruction>(this);
-
-        // Set copy’s target and data to those of node.
-        auto processing_instruction_copy = realm().create<ProcessingInstruction>(*document, processing_instruction->data(), processing_instruction->target());
-        copy = processing_instruction_copy;
-    }
-    // Otherwise, Do nothing.
-    else if (is<DocumentFragment>(this)) {
-        copy = realm().create<DocumentFragment>(*document);
-    }
-
-    // FIXME: 4. Set copy’s node document and document to copy, if copy is a document, and set copy’s node document to document otherwise.
-
-    // 5. Run any cloning steps defined for node in other applicable specifications and pass copy, node, document and the clone children flag if set, as parameters.
-    TRY(cloned(*copy, clone_children));
-
-    // 6. If the clone children flag is set, clone all the children of node and append them to copy, with document as specified and the clone children flag being set.
-    if (clone_children) {
+    // 5. If subtree is true, then for each child of node’s children, in tree order:
+    //    clone a node given child with document set to document, subtree set to subtree, and parent set to copy.
+    if (subtree) {
         for (auto child = first_child(); child; child = child->next_sibling()) {
-            TRY(copy->append_child(TRY(child->clone_node(document, true))));
+            TRY(child->clone_node(document, subtree, copy));
         }
     }
 
-    // 7. If node is a shadow host whose shadow root’s clonable is true:
-    if (is_element() && static_cast<Element const&>(*this).is_shadow_host() && static_cast<Element const&>(*this).shadow_root()->clonable()) {
-        // 1. Assert: copy is not a shadow host.
-        VERIFY(!copy->is_element() || !static_cast<Element const&>(*copy).is_shadow_host());
+    // 6. If node is an element, node is a shadow host, and node’s shadow root’s clonable is true:
+    if (is_element()) {
+        auto& node_element = verify_cast<Element>(*this);
+        if (node_element.is_shadow_host() && node_element.shadow_root()->clonable()) {
+            // 1. Assert: copy is not a shadow host.
+            auto& copy_element = verify_cast<Element>(*copy);
+            VERIFY(!copy_element.is_shadow_host());
 
-        // 2. Run attach a shadow root with copy, node’s shadow root’s mode, true, node’s shadow root’s serializable,
-        //    node’s shadow root’s delegates focus, and node’s shadow root’s slot assignment.
-        auto& node_shadow_root = *static_cast<Element&>(*this).shadow_root();
-        TRY(static_cast<Element&>(*copy).attach_a_shadow_root(node_shadow_root.mode(), true, node_shadow_root.serializable(), node_shadow_root.delegates_focus(), node_shadow_root.slot_assignment()));
+            // 2. Attach a shadow root with copy, node’s shadow root’s mode, true, node’s shadow root’s serializable, node’s shadow root’s delegates focus, and node’s shadow root’s slot assignment.
+            TRY(copy_element.attach_a_shadow_root(node_element.shadow_root()->mode(), true, node_element.shadow_root()->serializable(), node_element.shadow_root()->delegates_focus(), node_element.shadow_root()->slot_assignment()));
 
-        // 3. Set copy’s shadow root’s declarative to node’s shadow root’s declarative.
-        static_cast<Element&>(*copy).shadow_root()->set_declarative(node_shadow_root.declarative());
+            // 3. Set copy’s shadow root’s declarative to node’s shadow root’s declarative.
+            copy_element.shadow_root()->set_declarative(node_element.shadow_root()->declarative());
 
-        // 4. For each child child of node’s shadow root, in tree order:
-        //    append the result of cloning child with document and the clone children flag set, to copy’s shadow root.
-        for (auto child = node_shadow_root.first_child(); child; child = child->next_sibling()) {
-            TRY(static_cast<Element&>(*copy).shadow_root()->append_child(TRY(child->clone_node(document, true))));
+            // 4. For each child of node’s shadow root’s children, in tree order:
+            //    clone a node given child with document set to document, subtree set to subtree, and parent set to copy’s shadow root.
+            for (auto child = node_element.shadow_root()->first_child(); child; child = child->next_sibling()) {
+                TRY(child->clone_node(document, subtree, copy_element.shadow_root()));
+            }
         }
     }
 
     // 7. Return copy.
+    return GC::Ref { *copy };
+}
+
+// https://dom.spec.whatwg.org/#clone-a-single-node
+WebIDL::ExceptionOr<GC::Ref<Node>> Node::clone_single_node(Document& document) const
+{
+    // To clone a single node given a node node and document document:
+
+    // 1. Let copy be null.
+    GC::Ptr<Node> copy = nullptr;
+
+    // 2. If node is an element:
+    if (is_element()) {
+        // 1. Set copy to the result of creating an element, given document, node’s local name, node’s namespace, node’s namespace prefix, and node’s is value.
+        auto& element = *verify_cast<Element>(this);
+        auto element_copy = TRY(DOM::create_element(document, element.local_name(), element.namespace_uri(), element.prefix(), element.is_value()));
+
+        // 2. For each attribute of node’s attribute list:
+        Optional<WebIDL::Exception> maybe_exception;
+        element.for_each_attribute([&](Attr const& attr) {
+            // 1. Let copyAttribute be the result of cloning a single node given attribute and document.
+            auto copy_attribute_or_error = attr.clone_single_node(document);
+            if (copy_attribute_or_error.is_error()) {
+                maybe_exception = copy_attribute_or_error.release_error();
+                return;
+            }
+
+            auto copy_attribute = copy_attribute_or_error.release_value();
+
+            // 2. Append copyAttribute to copy.
+            element_copy->append_attribute(verify_cast<Attr>(*copy_attribute));
+        });
+
+        if (maybe_exception.has_value())
+            return *maybe_exception;
+
+        copy = move(element_copy);
+    }
+
+    // 3. Otherwise, set copy to a node that implements the same interfaces as node, and fulfills these additional requirements, switching on the interface node implements:
+    else {
+        if (is_document()) {
+            // -> Document
+            auto& document_ = verify_cast<Document>(*this);
+            auto document_copy = [&] -> GC::Ref<Document> {
+                switch (document_.document_type()) {
+                case Document::Type::XML:
+                    return XMLDocument::create(realm(), document_.url());
+                case Document::Type::HTML:
+                    return HTML::HTMLDocument::create(realm(), document_.url());
+                default:
+                    return Document::create(realm(), document_.url());
+                }
+            }();
+
+            // Set copy’s encoding, content type, URL, origin, type, and mode to those of node.
+            document_copy->set_encoding(document_.encoding());
+            document_copy->set_content_type(document_.content_type());
+            document_copy->set_url(document_.url());
+            document_copy->set_origin(document_.origin());
+            document_copy->set_document_type(document_.document_type());
+            document_copy->set_quirks_mode(document_.mode());
+            copy = move(document_copy);
+        } else if (is_document_type()) {
+            // -> DocumentType
+            auto& document_type = verify_cast<DocumentType>(*this);
+            auto document_type_copy = realm().create<DocumentType>(document);
+
+            // Set copy’s name, public ID, and system ID to those of node.
+            document_type_copy->set_name(document_type.name());
+            document_type_copy->set_public_id(document_type.public_id());
+            document_type_copy->set_system_id(document_type.system_id());
+            copy = move(document_type_copy);
+        } else if (is_attribute()) {
+            // -> Attr
+            // Set copy’s namespace, namespace prefix, local name, and value to those of node.
+            auto& attr = verify_cast<Attr>(*this);
+            copy = attr.clone(document);
+        } else if (is_text()) {
+            // -> Text
+            auto& text = verify_cast<Text>(*this);
+
+            // Set copy’s data to that of node.
+            copy = [&]() -> GC::Ref<Text> {
+                switch (type()) {
+                case NodeType::TEXT_NODE:
+                    return realm().create<Text>(document, text.data());
+                case NodeType::CDATA_SECTION_NODE:
+                    return realm().create<CDATASection>(document, text.data());
+                default:
+                    VERIFY_NOT_REACHED();
+                }
+            }();
+        } else if (is_comment()) {
+            // -> Comment
+            auto& comment = verify_cast<Comment>(*this);
+
+            // Set copy’s data to that of node.
+            auto comment_copy = realm().create<Comment>(document, comment.data());
+            copy = move(comment_copy);
+        } else if (is<ProcessingInstruction>(this)) {
+            // -> ProcessingInstruction
+            auto& processing_instruction = verify_cast<ProcessingInstruction>(*this);
+
+            // Set copy’s target and data to those of node.
+            auto processing_instruction_copy = realm().create<ProcessingInstruction>(document, processing_instruction.data(), processing_instruction.target());
+            copy = move(processing_instruction_copy);
+        }
+        // -> Otherwise
+        //    Do nothing.
+        else if (is<DocumentFragment>(this)) {
+            copy = realm().create<DocumentFragment>(document);
+        } else {
+            dbgln("Missing code for cloning a '{}' node. Please add it to Node::clone_single_node()", class_name());
+            VERIFY_NOT_REACHED();
+        }
+    }
+
+    // 4. Assert: copy is a node.
     VERIFY(copy);
+
+    // 5. If node is a document, then set document to copy.
+    Document& document_to_use = is_document()
+        ? static_cast<Document&>(*copy)
+        : document;
+
+    // 6. Set copy’s node document to document.
+    copy->set_document(document_to_use);
+
+    // 7. Return copy.
     return GC::Ref { *copy };
 }
 
 // https://dom.spec.whatwg.org/#dom-node-clonenode
-WebIDL::ExceptionOr<GC::Ref<Node>> Node::clone_node_binding(bool deep)
+WebIDL::ExceptionOr<GC::Ref<Node>> Node::clone_node_binding(bool subtree)
 {
     // 1. If this is a shadow root, then throw a "NotSupportedError" DOMException.
     if (is<ShadowRoot>(*this))
         return WebIDL::NotSupportedError::create(realm(), "Cannot clone shadow root"_string);
 
-    // 2. Return a clone of this, with the clone children flag set if deep is true.
-    return clone_node(nullptr, deep);
+    // 2. Return the result of cloning a node given this with subtree set to subtree.
+    return clone_node(nullptr, subtree);
 }
 
 void Node::set_document(Badge<Document>, Document& document)
+{
+    set_document(document);
+}
+
+void Node::set_document(Document& document)
 {
     if (m_document.ptr() == &document)
         return;
@@ -1160,9 +1246,48 @@ void Node::set_document(Badge<Document>, Document& document)
     }
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#editable
 bool Node::is_editable() const
 {
-    return parent() && parent()->is_editable();
+    // Something is editable if it is a node; it is not an editing host;
+    if (is_editing_host())
+        return false;
+
+    // it does not have a contenteditable attribute set to the false state;
+    if (is<HTML::HTMLElement>(this) && static_cast<HTML::HTMLElement const&>(*this).content_editable_state() == HTML::ContentEditableState::False)
+        return false;
+
+    // its parent is an editing host or editable;
+    if (!parent() || !parent()->is_editable_or_editing_host())
+        return false;
+
+    // and either it is an HTML element,
+    if (is<HTML::HTMLElement>(this))
+        return true;
+
+    // or it is an svg or math element,
+    if (is<SVG::SVGElement>(this) || is<MathML::MathMLElement>(this))
+        return true;
+
+    // or it is not an Element and its parent is an HTML element.
+    return !is<Element>(this) && is<HTML::HTMLElement>(parent());
+}
+
+// https://html.spec.whatwg.org/multipage/interaction.html#editing-host
+bool Node::is_editing_host() const
+{
+    // NOTE: Both conditions below require this to be an HTML element.
+    if (!is<HTML::HTMLElement>(this))
+        return false;
+
+    // An editing host is either an HTML element with its contenteditable attribute in the true state or
+    // plaintext-only state,
+    auto state = static_cast<HTML::HTMLElement const&>(*this).content_editable_state();
+    if (state == HTML::ContentEditableState::True || state == HTML::ContentEditableState::PlaintextOnly)
+        return true;
+
+    // or a child HTML element of a Document whose design mode enabled is true.
+    return is<Document>(parent()) && static_cast<Document const&>(*parent()).design_mode_enabled_state();
 }
 
 void Node::set_layout_node(Badge<Layout::Node>, GC::Ref<Layout::Node> layout_node)
@@ -1185,6 +1310,22 @@ EventTarget* Node::get_parent(Event const&)
     return parent();
 }
 
+void Node::set_needs_inherited_style_update(bool value)
+{
+    if (m_needs_inherited_style_update == value)
+        return;
+    m_needs_inherited_style_update = value;
+
+    if (m_needs_inherited_style_update) {
+        for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+            if (ancestor->m_child_needs_style_update)
+                break;
+            ancestor->m_child_needs_style_update = true;
+        }
+        document().schedule_style_update();
+    }
+}
+
 void Node::set_needs_style_update(bool value)
 {
     if (m_needs_style_update == value)
@@ -1199,6 +1340,10 @@ void Node::set_needs_style_update(bool value)
         }
         document().schedule_style_update();
     }
+}
+
+void Node::post_connection()
+{
 }
 
 void Node::inserted()
@@ -1412,6 +1557,9 @@ void Node::serialize_tree_as_json(JsonObjectSerializer<StringBuilder>& object) c
         MUST(object.add("type"sv, "element"));
 
         auto const* element = static_cast<DOM::Element const*>(this);
+        if (element->namespace_uri().has_value())
+            MUST(object.add("namespace"sv, element->namespace_uri().value()));
+
         if (element->has_attributes()) {
             auto attributes = MUST(object.add_object("attributes"sv));
             element->for_each_attribute([&attributes](auto& name, auto& value) {
@@ -1725,20 +1873,19 @@ bool Node::is_equal_node(Node const* other_node) const
     }
 
     // A and B have the same number of children.
-    size_t this_child_count = child_count();
-    size_t other_child_count = other_node->child_count();
-    if (this_child_count != other_child_count)
+    if (child_count() != other_node->child_count())
         return false;
 
     // Each child of A equals the child of B at the identical index.
-    // FIXME: This can be made nicer. child_at_index() is O(n).
-    for (size_t i = 0; i < this_child_count; ++i) {
-        auto* this_child = child_at_index(i);
-        auto* other_child = other_node->child_at_index(i);
-        VERIFY(this_child);
+    auto* this_child = first_child();
+    auto* other_child = other_node->first_child();
+    while (this_child) {
         VERIFY(other_child);
         if (!this_child->is_equal_node(other_child))
             return false;
+
+        this_child = this_child->next_sibling();
+        other_child = other_child->next_sibling();
     }
 
     return true;
@@ -2216,7 +2363,7 @@ void Node::build_accessibility_tree(AccessibilityTreeNode& parent)
 }
 
 // https://www.w3.org/TR/accname-1.2/#mapping_additional_nd_te
-ErrorOr<String> Node::name_or_description(NameOrDescription target, Document const& document, HashTable<UniqueNodeID>& visited_nodes, IsDescendant is_descendant) const
+ErrorOr<String> Node::name_or_description(NameOrDescription target, Document const& document, HashTable<UniqueNodeID>& visited_nodes, IsDescendant is_descendant, ShouldComputeRole should_compute_role) const
 {
     // The text alternative for a given element is computed as follows:
     // 1. Set the root node to the given element, the current node to the root node, and the total accumulated text to the
@@ -2228,7 +2375,15 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
 
     if (is_element()) {
         auto const* element = static_cast<DOM::Element const*>(this);
-        auto role = element->role_from_role_attribute_value();
+        Optional<ARIA::Role> role = OptionalNone {};
+        // Per https://w3c.github.io/aria/#document-handling_author-errors_roles, determining whether to ignore certain
+        // specified landmark roles requires first determining, in the ARIAMixin code, whether the element for which the
+        // role is specified has an accessible name — that is, calling into this name_or_description code. But if we
+        // then try to retrieve a role for such elements here, that’d then end up calling right back into this
+        // name_or_description code — which would cause the calls to loop infinitely. So to avoid that, the caller
+        // in the ARIAMixin code can pass the shouldComputeRole parameter to indicate we must skip the role lookup.
+        if (should_compute_role == ShouldComputeRole::Yes)
+            role = element->role_from_role_attribute_value();
         // Per https://w3c.github.io/html-aam/#el-aside and https://w3c.github.io/html-aam/#el-section, computing a
         // default role for an aside element or section element requires first computing its accessible name — that is,
         // calling into this name_or_description code. But if we then try to determine a default role for the aside
@@ -2342,6 +2497,8 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
         if (labels != nullptr && labels->length() > 0) {
             StringBuilder builder;
             for (u32 i = 0; i < labels->length(); i++) {
+                if (!builder.is_empty())
+                    builder.append(" "sv);
                 auto nodes = labels->item(i)->children_as_vector();
                 for (auto const& node : nodes) {
                     // AD-HOC: https://wpt.fyi/results/accname/name/comp_host_language_label.html has “encapsulation”
@@ -2424,13 +2581,15 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
 
         // E. Host Language Label: Otherwise, if the current node's native markup provides an attribute (e.g. alt) or
         //    element (e.g. HTML label or SVG title) that defines a text alternative, return that alternative in the form
-        //    of a flat string as defined by the host language, unless the element is marked as presentational
-        //    (role="presentation" or role="none").
-        //
+        //    of a flat string as defined by the host language.
         // TODO: Confirm (through existing WPT test cases) whether HTMLLabelElement is already handled (by the code for
         // step C. “Embedded Control” above) in conformance with the spec requirements — and if not, then add handling.
-        if (role != ARIA::Role::presentation && role != ARIA::Role::none && is<HTML::HTMLImageElement>(*element))
-            return element->alternative_text().release_value();
+        //
+        // https://w3c.github.io/html-aam/#img-element-accessible-name-computation
+        // use alt attribute, even if its value is the empty string.
+        // See also https://wpt.fyi/results/accname/name/comp_tooltip.tentative.html.
+        if (is<HTML::HTMLImageElement>(*element) && element->has_attribute(HTML::AttributeNames::alt))
+            return element->get_attribute(HTML::AttributeNames::alt).value();
 
         // https://w3c.github.io/svg-aam/#mapping_additional_nd
         Optional<String> title_element_text;
@@ -2547,7 +2706,7 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
                 current_node = child_node;
 
                 // b. Compute the text alternative of the current node beginning with step 2. Set the result to that text alternative.
-                auto result = MUST(current_node->name_or_description(target, document, visited_nodes, IsDescendant::Yes));
+                auto result = MUST(current_node->name_or_description(target, document, visited_nodes, IsDescendant::Yes, should_compute_role));
 
                 // J. Append a space character and the result of each step above to the total accumulated text.
                 // AD-HOC: Doing the space-adding here is in a different order from what the spec states.
@@ -2617,11 +2776,11 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
 }
 
 // https://www.w3.org/TR/accname-1.2/#mapping_additional_nd_name
-ErrorOr<String> Node::accessible_name(Document const& document) const
+ErrorOr<String> Node::accessible_name(Document const& document, ShouldComputeRole should_compute_role) const
 {
     HashTable<UniqueNodeID> visited_nodes;
     // User agents MUST compute an accessible name using the rules outlined below in the section titled Accessible Name and Description Computation.
-    return name_or_description(NameOrDescription::Name, document, visited_nodes);
+    return name_or_description(NameOrDescription::Name, document, visited_nodes, IsDescendant::No, should_compute_role);
 }
 
 // https://www.w3.org/TR/accname-1.2/#mapping_additional_nd_description

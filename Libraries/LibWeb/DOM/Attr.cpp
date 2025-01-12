@@ -28,7 +28,7 @@ GC::Ref<Attr> Attr::create(Document& document, QualifiedName qualified_name, Str
     return document.realm().create<Attr>(document, move(qualified_name), move(value), owner_element);
 }
 
-GC::Ref<Attr> Attr::clone(Document& document)
+GC::Ref<Attr> Attr::clone(Document& document) const
 {
     return realm().create<Attr>(document, m_qualified_name, m_value, nullptr);
 }
@@ -101,11 +101,12 @@ void Attr::handle_attribute_changes(Element& element, Optional<String> const& ol
     // 1. Queue a mutation record of "attributes" for element with attribute’s local name, attribute’s namespace, oldValue, « », « », null, and null.
     element.queue_mutation_record(MutationType::attributes, local_name(), namespace_uri(), old_value, {}, {}, nullptr, nullptr);
 
-    // 2. If element is custom, then enqueue a custom element callback reaction with element, callback name "attributeChangedCallback", and an argument list containing attribute’s local name, oldValue, newValue, and attribute’s namespace.
+    // 2. If element is custom, then enqueue a custom element callback reaction with element, callback name "attributeChangedCallback",
+    //    and « attribute’s local name, oldValue, newValue, attribute’s namespace ».
     if (element.is_custom()) {
         auto& vm = this->vm();
 
-        GC::MarkedVector<JS::Value> arguments { vm.heap() };
+        GC::RootVector<JS::Value> arguments { vm.heap() };
         arguments.append(JS::PrimitiveString::create(vm, local_name()));
         arguments.append(!old_value.has_value() ? JS::js_null() : JS::PrimitiveString::create(vm, old_value.value()));
         arguments.append(!new_value.has_value() ? JS::js_null() : JS::PrimitiveString::create(vm, new_value.value()));

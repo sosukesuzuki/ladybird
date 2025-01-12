@@ -26,14 +26,11 @@
 #include <LibWeb/Bindings/SyntheticHostDefined.h>
 #include <LibWeb/Bindings/WindowExposedInterfaces.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/DOM/MutationType.h>
-#include <LibWeb/Editing/CommandNames.h>
-#include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/CustomElements/CustomElementDefinition.h>
-#include <LibWeb/HTML/CustomElements/CustomElementReactionNames.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/Location.h>
 #include <LibWeb/HTML/PromiseRejectionEvent.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
@@ -43,25 +40,12 @@
 #include <LibWeb/HTML/Scripting/SyntheticRealmSettings.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/ShadowRealmGlobalScope.h>
-#include <LibWeb/HTML/TagNames.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/HTML/WorkletGlobalScope.h>
-#include <LibWeb/MathML/TagNames.h>
-#include <LibWeb/MediaSourceExtensions/EventNames.h>
-#include <LibWeb/Namespace.h>
-#include <LibWeb/NavigationTiming/EntryNames.h>
-#include <LibWeb/PerformanceTimeline/EntryTypes.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
-#include <LibWeb/SVG/AttributeNames.h>
-#include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/ServiceWorker/ServiceWorkerGlobalScope.h>
-#include <LibWeb/UIEvents/EventNames.h>
-#include <LibWeb/UIEvents/InputTypes.h>
-#include <LibWeb/WebGL/EventNames.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
-#include <LibWeb/XHR/EventNames.h>
-#include <LibWeb/XLink/AttributeNames.h>
 
 namespace Web::Bindings {
 
@@ -92,6 +76,10 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
     VERIFY(!s_main_thread_vm);
 
     s_main_thread_vm = TRY(JS::VM::create(make<WebEngineCustomData>()));
+
+    auto& custom_data = verify_cast<WebEngineCustomData>(*s_main_thread_vm->custom_data());
+    custom_data.agent.event_loop = s_main_thread_vm->heap().allocate<HTML::EventLoop>(type);
+
     s_main_thread_vm->on_unimplemented_property_access = [](auto const& object, auto const& property_key) {
         dbgln("FIXME: Unimplemented IDL interface: '{}.{}'", object.class_name(), property_key.to_string());
     };
@@ -99,29 +87,6 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
     // NOTE: We intentionally leak the main thread JavaScript VM.
     //       This avoids doing an exhaustive garbage collection on process exit.
     s_main_thread_vm->ref();
-
-    auto& custom_data = verify_cast<WebEngineCustomData>(*s_main_thread_vm->custom_data());
-    custom_data.event_loop = s_main_thread_vm->heap().allocate<HTML::EventLoop>(type);
-
-    // These strings could potentially live on the VM similar to CommonPropertyNames.
-    DOM::MutationType::initialize_strings();
-    Editing::CommandNames::initialize_strings();
-    HTML::AttributeNames::initialize_strings();
-    HTML::CustomElementReactionNames::initialize_strings();
-    HTML::EventNames::initialize_strings();
-    HTML::TagNames::initialize_strings();
-    MathML::TagNames::initialize_strings();
-    MediaSourceExtensions::EventNames::initialize_strings();
-    Namespace::initialize_strings();
-    NavigationTiming::EntryNames::initialize_strings();
-    PerformanceTimeline::EntryTypes::initialize_strings();
-    SVG::AttributeNames::initialize_strings();
-    SVG::TagNames::initialize_strings();
-    UIEvents::EventNames::initialize_strings();
-    UIEvents::InputTypes::initialize_strings();
-    WebGL::EventNames::initialize_strings();
-    XHR::EventNames::initialize_strings();
-    XLink::AttributeNames::initialize_strings();
 
     // 8.1.5.1 HostEnsureCanAddPrivateElement(O), https://html.spec.whatwg.org/multipage/webappapis.html#the-hostensurecanaddprivateelement-implementation
     s_main_thread_vm->host_ensure_can_add_private_element = [](JS::Object const& object) -> JS::ThrowCompletionOr<void> {
@@ -499,7 +464,7 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
                 // 3. If the previous step threw an exception, then:
                 if (maybe_exception.is_exception()) {
                     // 1. Let completion be Completion Record { [[Type]]: throw, [[Value]]: resolutionError, [[Target]]: empty }.
-                    auto completion = dom_exception_to_throw_completion(main_thread_vm(), maybe_exception.exception());
+                    auto completion = exception_to_throw_completion(main_thread_vm(), maybe_exception.exception());
 
                     // 2. Perform FinishLoadingImportedModule(referrer, moduleRequest, payload, completion).
                     JS::finish_loading_imported_module(referrer, module_request, payload, completion);
@@ -532,17 +497,14 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
             }
         }
 
-        // 8. Disallow further import maps given moduleMapRealm.
-        HTML::disallow_further_import_maps(*module_map_realm);
-
-        // 9. Let url be the result of resolving a module specifier given referencingScript and moduleRequest.[[Specifier]],
+        // 8. Let url be the result of resolving a module specifier given referencingScript and moduleRequest.[[Specifier]],
         //    catching any exceptions. If they throw an exception, let resolutionError be the thrown exception.
         auto url = HTML::resolve_module_specifier(referencing_script, module_request.module_specifier);
 
-        // 10. If the previous step threw an exception, then:
+        // 9. If the previous step threw an exception, then:
         if (url.is_exception()) {
             // 1. Let completion be Completion Record { [[Type]]: throw, [[Value]]: resolutionError, [[Target]]: empty }.
-            auto completion = dom_exception_to_throw_completion(main_thread_vm(), url.exception());
+            auto completion = exception_to_throw_completion(main_thread_vm(), url.exception());
 
             // 2. Perform FinishLoadingImportedModule(referrer, moduleRequest, payload, completion).
             HTML::TemporaryExecutionContext context { *module_map_realm };
@@ -552,19 +514,19 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
             return;
         }
 
-        // 11. Let settingsObject be moduleMapRealm's principal realm's settings object.
+        // 10. Let settingsObject be moduleMapRealm's principal realm's settings object.
         auto& settings_object = HTML::principal_realm_settings_object(HTML::principal_realm(*module_map_realm));
 
-        // 12. Let fetchOptions be the result of getting the descendant script fetch options given originalFetchOptions, url, and settingsObject.
+        // 11. Let fetchOptions be the result of getting the descendant script fetch options given originalFetchOptions, url, and settingsObject.
         auto fetch_options = HTML::get_descendant_script_fetch_options(original_fetch_options, url.value(), settings_object);
 
-        // 13. Let destination be "script".
+        // 12. Let destination be "script".
         auto destination = Fetch::Infrastructure::Request::Destination::Script;
 
-        // 14. Let fetchClient be moduleMapRealm's principal realm's settings object.
+        // 13. Let fetchClient be moduleMapRealm's principal realm's settings object.
         GC::Ref fetch_client { HTML::principal_realm_settings_object(HTML::principal_realm(*module_map_realm)) };
 
-        // 14. If loadState is not undefined, then:
+        // 15. If loadState is not undefined, then:
         HTML::PerformTheFetchHook perform_fetch;
         if (load_state) {
             auto& fetch_context = static_cast<HTML::FetchContext&>(*load_state);
@@ -633,7 +595,7 @@ ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
             vm.pop_execution_context();
         });
 
-        // 15. Fetch a single imported module script given url, fetchClient, destination, fetchOptions, moduleMapRealm, fetchReferrer,
+        // 16. Fetch a single imported module script given url, fetchClient, destination, fetchOptions, moduleMapRealm, fetchReferrer,
         //     moduleRequest, and onSingleFetchComplete as defined below.
         //     If loadState is not undefined and loadState.[[PerformFetch]] is not null, pass loadState.[[PerformFetch]] along as well.
         HTML::fetch_single_imported_module_script(*module_map_realm, url.release_value(), *fetch_client, destination, fetch_options, *module_map_realm, fetch_referrer, module_request, perform_fetch, on_single_fetch_complete);
@@ -695,25 +657,24 @@ JS::VM& main_thread_vm()
 void queue_mutation_observer_microtask(DOM::Document const& document)
 {
     auto& vm = main_thread_vm();
-    auto& custom_data = verify_cast<WebEngineCustomData>(*vm.custom_data());
+    auto& surrounding_agent = verify_cast<WebEngineCustomData>(*vm.custom_data()).agent;
 
     // 1. If the surrounding agent’s mutation observer microtask queued is true, then return.
-    if (custom_data.mutation_observer_microtask_queued)
+    if (surrounding_agent.mutation_observer_microtask_queued)
         return;
 
     // 2. Set the surrounding agent’s mutation observer microtask queued to true.
-    custom_data.mutation_observer_microtask_queued = true;
+    surrounding_agent.mutation_observer_microtask_queued = true;
 
     // 3. Queue a microtask to notify mutation observers.
     // NOTE: This uses the implied document concept. In the case of mutation observers, it is always done in a node context, so document should be that node's document.
-    // FIXME: Is it safe to pass custom_data through?
-    HTML::queue_a_microtask(&document, GC::create_function(vm.heap(), [&custom_data, &heap = document.heap()]() {
+    HTML::queue_a_microtask(&document, GC::create_function(vm.heap(), [&surrounding_agent, &heap = document.heap()]() {
         // 1. Set the surrounding agent’s mutation observer microtask queued to false.
-        custom_data.mutation_observer_microtask_queued = false;
+        surrounding_agent.mutation_observer_microtask_queued = false;
 
         // 2. Let notifySet be a clone of the surrounding agent’s mutation observers.
-        GC::MarkedVector<DOM::MutationObserver*> notify_set(heap);
-        for (auto& observer : custom_data.mutation_observers)
+        GC::RootVector<DOM::MutationObserver*> notify_set(heap);
+        for (auto& observer : surrounding_agent.mutation_observers)
             notify_set.append(observer);
 
         // FIXME: 3. Let signalSet be a clone of the surrounding agent’s signal slots.
@@ -739,7 +700,7 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
                 }
             }
 
-            // 4. If records is not empty, then invoke mo’s callback with « records, mo », and mo. If this throws an exception, catch it, and report the exception.
+            // 4. If records is not empty, then invoke mo’s callback with « records, mo » and "report", and with callback this value mo.
             if (!records.is_empty()) {
                 auto& callback = mutation_observer->callback();
                 auto& realm = callback.callback_context;
@@ -751,9 +712,7 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
                     MUST(wrapped_records->create_data_property(property_index, record.ptr()));
                 }
 
-                auto result = WebIDL::invoke_callback(callback, mutation_observer, wrapped_records, mutation_observer);
-                if (result.is_abrupt())
-                    HTML::report_exception(result, realm);
+                (void)WebIDL::invoke_callback(callback, mutation_observer, WebIDL::ExceptionBehavior::Report, wrapped_records, mutation_observer);
             }
         }
 
@@ -827,12 +786,8 @@ void invoke_custom_element_reactions(Vector<GC::Root<DOM::Element>>& element_que
                 },
                 [&](DOM::CustomElementCallbackReaction& custom_element_callback_reaction) -> void {
                     // -> callback reaction
-                    //      Invoke reaction's callback function with reaction's arguments, and with element as the callback this value.
-                    auto result = WebIDL::invoke_callback(*custom_element_callback_reaction.callback, element.ptr(), custom_element_callback_reaction.arguments);
-                    // FIXME: The error from CustomElementCallbackReaction is supposed
-                    //     to use the new steps for IDL callback error reporting
-                    if (result.is_abrupt())
-                        HTML::report_exception(result, element->realm());
+                    //      Invoke reaction's callback function with reaction's arguments and "report", and callback this value set to element.
+                    (void)WebIDL::invoke_callback(*custom_element_callback_reaction.callback, element.ptr(), WebIDL::ExceptionBehavior::Report, custom_element_callback_reaction.arguments);
                 });
         }
     }

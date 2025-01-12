@@ -107,7 +107,7 @@ GC::Ptr<CSSStyleRule> Parser::convert_to_style_rule(QualifiedRule const& qualifi
         return {};
     }
 
-    GC::MarkedVector<CSSRule*> child_rules { m_context.realm().heap() };
+    GC::RootVector<CSSRule*> child_rules { m_context.realm().heap() };
     for (auto& child : qualified_rule.child_rules) {
         child.visit(
             [&](Rule const& rule) {
@@ -246,7 +246,7 @@ GC::Ptr<CSSRule> Parser::convert_to_layer_rule(AtRule const& rule, Nested nested
         }
 
         // Then the rules
-        GC::MarkedVector<CSSRule*> child_rules { m_context.realm().heap() };
+        GC::RootVector<CSSRule*> child_rules { m_context.realm().heap() };
         for (auto const& child : rule.child_rules_and_lists_of_declarations) {
             child.visit(
                 [&](Rule const& rule) {
@@ -341,7 +341,7 @@ GC::Ptr<CSSKeyframesRule> Parser::convert_to_keyframes_rule(AtRule const& rule)
 
     auto name = name_token.to_string();
 
-    GC::MarkedVector<CSSRule*> keyframes(m_context.realm().heap());
+    GC::RootVector<CSSRule*> keyframes(m_context.realm().heap());
     rule.for_each_as_qualified_rule_list([&](auto& qualified_rule) {
         if (!qualified_rule.child_rules.is_empty()) {
             dbgln_if(CSS_PARSER_DEBUG, "CSSParser: @keyframes keyframe rule contains at-rules; discarding them.");
@@ -468,7 +468,7 @@ GC::Ptr<CSSSupportsRule> Parser::convert_to_supports_rule(AtRule const& rule, Ne
         return {};
     }
 
-    GC::MarkedVector<CSSRule*> child_rules { m_context.realm().heap() };
+    GC::RootVector<CSSRule*> child_rules { m_context.realm().heap() };
     for (auto const& child : rule.child_rules_and_lists_of_declarations) {
         child.visit(
             [&](Rule const& rule) {
@@ -619,8 +619,8 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
 
             // TODO: Once we implement calc-simplification in the parser, we should no longer see math values here,
             //       unless they're impossible to resolve and thus invalid.
-            if (percentage_value->is_math()) {
-                if (auto result = percentage_value->as_math().resolve_percentage(); result.has_value())
+            if (percentage_value->is_calculated()) {
+                if (auto result = percentage_value->as_calculated().resolve_percentage(); result.has_value())
                     return result.value();
             }
 
@@ -667,7 +667,7 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
                     if (value.has_value()) {
                         font_display = *value;
                     } else {
-                        dbgln_if(CSS_PARSER_DEBUG, "CSSParser: `{}` is not a valid value for font-display", keyword_value->to_string());
+                        dbgln_if(CSS_PARSER_DEBUG, "CSSParser: `{}` is not a valid value for font-display", keyword_value->to_string(CSSStyleValue::SerializationMode::Normal));
                     }
                 }
             }
@@ -734,8 +734,8 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
                         auto const& setting_value = feature_tag->as_open_type_tagged().value();
                         if (setting_value->is_integer()) {
                             settings.set(feature_tag->as_open_type_tagged().tag(), setting_value->as_integer().integer());
-                        } else if (setting_value->is_math() && setting_value->as_math().resolves_to_number()) {
-                            if (auto integer = setting_value->as_math().resolve_integer(); integer.has_value()) {
+                        } else if (setting_value->is_calculated() && setting_value->as_calculated().resolves_to_number()) {
+                            if (auto integer = setting_value->as_calculated().resolve_integer(); integer.has_value()) {
                                 settings.set(feature_tag->as_open_type_tagged().tag(), *integer);
                             } else {
                                 dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Calculated value in font-feature-settings descriptor cannot be resolved at parse time; skipping");
@@ -746,7 +746,7 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
                     }
                     font_feature_settings = move(settings);
                 } else {
-                    dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Failed to parse font-feature-settings descriptor, not compatible with value returned from parsing font-feature-settings property: {}", value.value()->to_string());
+                    dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Failed to parse font-feature-settings descriptor, not compatible with value returned from parsing font-feature-settings property: {}", value.value()->to_string(CSSStyleValue::SerializationMode::Normal));
                 }
             }
             return;
@@ -808,8 +808,8 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
                         auto const& setting_value = variation_tag->as_open_type_tagged().value();
                         if (setting_value->is_number()) {
                             settings.set(variation_tag->as_open_type_tagged().tag(), setting_value->as_number().number());
-                        } else if (setting_value->is_math() && setting_value->as_math().resolves_to_number()) {
-                            if (auto number = setting_value->as_math().resolve_number(); number.has_value()) {
+                        } else if (setting_value->is_calculated() && setting_value->as_calculated().resolves_to_number()) {
+                            if (auto number = setting_value->as_calculated().resolve_number(); number.has_value()) {
                                 settings.set(variation_tag->as_open_type_tagged().tag(), *number);
                             } else {
                                 dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Calculated value in font-variation-settings descriptor cannot be resolved at parse time; skipping");
@@ -820,7 +820,7 @@ GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)
                     }
                     font_variation_settings = move(settings);
                 } else {
-                    dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Failed to parse font-variation-settings descriptor, not compatible with value returned from parsing font-variation-settings property: {}", value.value()->to_string());
+                    dbgln_if(CSS_PARSER_DEBUG, "CSSParser: Failed to parse font-variation-settings descriptor, not compatible with value returned from parsing font-variation-settings property: {}", value.value()->to_string(CSSStyleValue::SerializationMode::Normal));
                 }
             }
             return;

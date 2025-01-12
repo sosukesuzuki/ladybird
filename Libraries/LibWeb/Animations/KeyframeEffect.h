@@ -97,7 +97,7 @@ public:
     Bindings::CompositeOperation composite() const { return m_composite; }
     void set_composite(Bindings::CompositeOperation value) { m_composite = value; }
 
-    WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> get_keyframes();
+    WebIDL::ExceptionOr<GC::RootVector<JS::Object*>> get_keyframes();
     WebIDL::ExceptionOr<void> set_keyframes(Optional<GC::Root<JS::Object>> const&);
 
     KeyFrameSet const* key_frame_set() { return m_key_frame_set; }
@@ -105,7 +105,7 @@ public:
 
     virtual bool is_keyframe_effect() const override { return true; }
 
-    virtual void update_style_properties() override;
+    virtual void update_computed_properties() override;
 
     Optional<CSS::AnimationPlayState> last_css_animation_play_state() const { return m_last_css_animation_play_state; }
     void set_last_css_animation_play_state(CSS::AnimationPlayState state) { m_last_css_animation_play_state = state; }

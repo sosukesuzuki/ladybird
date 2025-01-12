@@ -83,11 +83,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     Web::Platform::AudioCodecPlugin::install_creation_hook([](auto loader) {
 #if defined(HAVE_QT_MULTIMEDIA)
         return Ladybird::AudioCodecPluginQt::create(move(loader));
-#elif defined(AK_OS_MACOS) || defined(HAVE_PULSEAUDIO)
-        return Web::Platform::AudioCodecPluginAgnostic::create(move(loader));
 #else
-        (void)loader;
-        return Error::from_string_literal("Don't know how to initialize audio in this configuration!");
+        return Web::Platform::AudioCodecPluginAgnostic::create(move(loader));
 #endif
     });
 
@@ -107,6 +104,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     bool force_cpu_painting = false;
     bool force_fontconfig = false;
     bool collect_garbage_on_every_allocation = false;
+    bool is_headless = false;
     StringView echo_server_port_string_view {};
 
     Core::ArgsParser args_parser;
@@ -127,6 +125,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     args_parser.add_option(force_fontconfig, "Force using fontconfig for font loading", "force-fontconfig");
     args_parser.add_option(collect_garbage_on_every_allocation, "Collect garbage after every JS heap allocation", "collect-garbage-on-every-allocation");
     args_parser.add_option(echo_server_port_string_view, "Echo server port used in test internals", "echo-server-port", 0, "echo_server_port");
+    args_parser.add_option(is_headless, "Report that the browser is running in headless mode", "headless");
 
     args_parser.parse(arguments);
 
@@ -151,6 +150,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     // Always use the CPU backend for layout tests, as the GPU backend is not deterministic
     WebContent::PageClient::set_use_skia_painter(force_cpu_painting ? WebContent::PageClient::UseSkiaPainter::CPUBackend : WebContent::PageClient::UseSkiaPainter::GPUBackendIfAvailable);
+
+    WebContent::PageClient::set_is_headless(is_headless);
 
     if (enable_http_cache) {
         Web::Fetch::Fetching::g_http_cache_enabled = true;

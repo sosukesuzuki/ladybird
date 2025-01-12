@@ -53,6 +53,11 @@ void Internals::signal_text_test_is_done(String const& text)
     internals_page().client().page_did_finish_text_test(text);
 }
 
+void Internals::set_test_timeout(double milliseconds)
+{
+    internals_page().client().page_did_set_test_timeout(milliseconds);
+}
+
 void Internals::gc()
 {
     vm().heap().collect_garbage();
@@ -122,6 +127,18 @@ void Internals::click(double x, double y, UIEvents::MouseButton button)
     auto position = page.css_to_device_point({ x, y });
     page.handle_mousedown(position, position, button, 0, 0);
     page.handle_mouseup(position, position, button, 0, 0);
+}
+
+void Internals::mouse_down(double x, double y)
+{
+    mouse_down(x, y, UIEvents::MouseButton::Primary);
+}
+
+void Internals::mouse_down(double x, double y, UIEvents::MouseButton button)
+{
+    auto& page = internals_page();
+    auto position = page.css_to_device_point({ x, y });
+    page.handle_mousedown(position, position, button, 0, 0);
 }
 
 void Internals::move_pointer_to(double x, double y)
@@ -225,6 +242,11 @@ u16 Internals::get_echo_server_port()
 void Internals::set_echo_server_port(u16 const port)
 {
     s_echo_server_port = port;
+}
+
+bool Internals::headless()
+{
+    return internals_page().client().is_headless();
 }
 
 }

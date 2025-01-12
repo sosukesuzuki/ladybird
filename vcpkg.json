@@ -1,5 +1,5 @@
 {
-  "builtin-baseline": "b2cb0da531c2f1f740045bfe7c4dac59f0b2b69c",
+  "builtin-baseline": "b322364f06308bdd24823f9d8f03fe0cc86fd46f",
   "dependencies": [
     {
       "name": "angle",
@@ -80,6 +80,7 @@
       "name": "mman",
       "platform": "windows"
     },
+    "openssl",
     {
       "name": "pthread",
       "platform": "windows"
@@ -128,11 +129,15 @@
     },
     {
       "name": "curl",
-      "version": "8.10.1#0"
+      "version": "8.11.1#0"
+    },
+    {
+      "name": "dirent",
+      "version": "1.24#0"
     },
     {
       "name": "ffmpeg",
-      "version": "6.1.1#11"
+      "version": "7.1#1"
     },
     {
       "name": "fontconfig",
@@ -144,11 +149,11 @@
     },
     {
       "name": "libjpeg-turbo",
-      "version": "3.0.2"
+      "version": "3.1.0#0"
     },
     {
       "name": "libjxl",
-      "version": "0.11.0"
+      "version": "0.11.1"
     },
     {
       "name": "libpng",
@@ -167,6 +172,14 @@
       "version": "1.4.0#1"
     },
     {
+      "name": "mman",
+      "version": "git-f5ff813#5"
+    },
+    {
+      "name": "openssl",
+      "version": "3.4.0#0"
+    },
+    {
       "name": "simdutf",
       "version": "5.6.0#0"
     },
@@ -176,7 +189,7 @@
     },
     {
       "name": "sqlite3",
-      "version": "3.46.1"
+      "version": "3.47.2#0"
     },
     {
       "name": "woff2",

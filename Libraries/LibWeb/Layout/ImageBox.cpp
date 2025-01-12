@@ -15,7 +15,7 @@ namespace Web::Layout {
 
 GC_DEFINE_ALLOCATOR(ImageBox);
 
-ImageBox::ImageBox(DOM::Document& document, DOM::Element& element, CSS::StyleProperties style, ImageProvider const& image_provider)
+ImageBox::ImageBox(DOM::Document& document, DOM::Element& element, GC::Ref<CSS::ComputedProperties> style, ImageProvider const& image_provider)
     : ReplacedBox(document, element, move(style))
     , m_image_provider(image_provider)
 {
@@ -43,14 +43,14 @@ void ImageBox::prepare_for_replaced_layout()
             set_natural_width(0);
             set_natural_height(0);
         } else {
-            auto const& font = Platform::FontPlugin::the().default_font();
+            auto font = Platform::FontPlugin::the().default_font(12);
             CSSPixels alt_text_width = 0;
             if (!m_cached_alt_text_width.has_value())
-                m_cached_alt_text_width = CSSPixels::nearest_value_for(font.width(alt));
+                m_cached_alt_text_width = CSSPixels::nearest_value_for(font->width(alt));
             alt_text_width = m_cached_alt_text_width.value();
 
             set_natural_width(alt_text_width + 16);
-            set_natural_height(CSSPixels::nearest_value_for(font.pixel_size()) + 16);
+            set_natural_height(CSSPixels::nearest_value_for(font->pixel_size()) + 16);
         }
     }
 

@@ -2,6 +2,7 @@
  * Copyright (c) 2018-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -157,6 +158,8 @@ public:
     void set_opener_policy(HTML::OpenerPolicy policy) { m_opener_policy = move(policy); }
 
     URL::URL parse_url(StringView) const;
+    URL::URL encoding_parse_url(StringView) const;
+    Optional<String> encoding_parse_and_serialize_url(StringView) const;
 
     CSS::StyleComputer& style_computer() { return *m_style_computer; }
     const CSS::StyleComputer& style_computer() const { return *m_style_computer; }
@@ -172,6 +175,7 @@ public:
 
     virtual FlyString node_name() const override { return "#document"_fly_string; }
 
+    void invalidate_style_for_elements_affected_by_hover_change(Node& old_new_hovered_common_ancestor, GC::Ptr<Node> hovered_node);
     void set_hovered_node(Node*);
     Node* hovered_node() { return m_hovered_node.ptr(); }
     Node const* hovered_node() const { return m_hovered_node.ptr(); }
@@ -230,14 +234,19 @@ public:
     Color background_color() const;
     Vector<CSS::BackgroundLayerData> const* background_layers() const;
 
-    Color normal_link_color() const;
+    Optional<Color> normal_link_color() const;
     void set_normal_link_color(Color);
 
-    Color active_link_color() const;
+    Optional<Color> active_link_color() const;
     void set_active_link_color(Color);
 
-    Color visited_link_color() const;
+    Optional<Color> visited_link_color() const;
     void set_visited_link_color(Color);
+
+    Optional<Vector<String> const&> supported_color_schemes() const;
+    void obtain_supported_color_schemes();
+
+    void obtain_theme_color();
 
     void update_style();
     void update_layout();
@@ -316,6 +325,7 @@ public:
 
     QuirksMode mode() const { return m_quirks_mode; }
     bool in_quirks_mode() const { return m_quirks_mode == QuirksMode::Yes; }
+    bool in_limited_quirks_mode() const { return m_quirks_mode == QuirksMode::Limited; }
     void set_quirks_mode(QuirksMode mode) { m_quirks_mode = mode; }
 
     Type document_type() const { return m_type; }
@@ -335,7 +345,6 @@ public:
     String const& compat_mode() const;
 
     void set_editable(bool editable) { m_editable = editable; }
-    virtual bool is_editable() const final;
 
     Element* focused_element() { return m_focused_element.ptr(); }
     Element const* focused_element() const { return m_focused_element.ptr(); }
@@ -604,6 +613,7 @@ public:
     void run_the_update_intersection_observations_steps(HighResolutionTime::DOMHighResTimeStamp time);
 
     void start_intersection_observing_a_lazy_loading_element(Element&);
+    void stop_intersection_observing_a_lazy_loading_element(Element&);
 
     void shared_declarative_refresh_steps(StringView input, GC::Ptr<HTML::HTMLMetaElement const> meta_element = nullptr);
 
@@ -661,7 +671,7 @@ public:
     WebIDL::ExceptionOr<void> set_design_mode(String const&);
 
     Element const* element_from_point(double x, double y);
-    GC::MarkedVector<GC::Ref<Element>> elements_from_point(double x, double y);
+    GC::RootVector<GC::Ref<Element>> elements_from_point(double x, double y);
     GC::Ptr<Element const> scrolling_element() const;
 
     void set_needs_to_resolve_paint_only_properties() { m_needs_to_resolve_paint_only_properties = true; }
@@ -757,6 +767,26 @@ public:
     bool css_styling_flag() const { return m_css_styling_flag; }
     void set_css_styling_flag(bool flag) { m_css_styling_flag = flag; }
 
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    Optional<bool> command_state_override(FlyString const& command) const { return m_command_state_override.get(command); }
+    void set_command_state_override(FlyString const& command, bool state) { m_command_state_override.set(command, state); }
+    void clear_command_state_override(FlyString const& command) { m_command_state_override.remove(command); }
+    void reset_command_state_overrides() { m_command_state_override.clear(); }
+
+    // https://w3c.github.io/editing/docs/execCommand/#value-override
+    Optional<String const&> command_value_override(FlyString const& command) const { return m_command_value_override.get(command); }
+    void set_command_value_override(FlyString const& command, String const& value);
+    void clear_command_value_override(FlyString const& command);
+    void reset_command_value_overrides() { m_command_value_override.clear(); }
+
+    GC::Ptr<DOM::Document> container_document() const;
+
+    GC::Ptr<HTML::Storage> session_storage_holder() { return m_session_storage_holder; }
+    void set_session_storage_holder(GC::Ptr<HTML::Storage> storage) { m_session_storage_holder = storage; }
+
+    GC::Ptr<HTML::Storage> local_storage_holder() { return m_local_storage_holder; }
+    void set_local_storage_holder(GC::Ptr<HTML::Storage> storage) { m_local_storage_holder = storage; }
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -782,7 +812,23 @@ private:
 
     Element* find_a_potential_indicated_element(FlyString const& fragment) const;
 
+    void dispatch_events_for_transition(GC::Ref<CSS::CSSTransition>);
     void dispatch_events_for_animation_if_necessary(GC::Ref<Animations::Animation>);
+
+    template<typename GetNotifier, typename... Args>
+    void notify_each_document_observer(GetNotifier&& get_notifier, Args&&... args)
+    {
+        ScopeGuard guard { [&]() { m_document_observers_being_notified.clear_with_capacity(); } };
+        m_document_observers_being_notified.ensure_capacity(m_document_observers.size());
+
+        for (auto observer : m_document_observers)
+            m_document_observers_being_notified.unchecked_append(observer);
+
+        for (auto document_observer : m_document_observers_being_notified) {
+            if (auto notifier = get_notifier(*document_observer))
+                notifier->function()(forward<Args>(args)...);
+        }
+    }
 
     GC::Ref<Page> m_page;
     OwnPtr<CSS::StyleComputer> m_style_computer;
@@ -801,6 +847,8 @@ private:
     Optional<Color> m_normal_link_color;
     Optional<Color> m_active_link_color;
     Optional<Color> m_visited_link_color;
+
+    Optional<Vector<String>> m_supported_color_schemes;
 
     GC::Ptr<HTML::HTMLParser> m_parser;
     bool m_active_parser_was_aborted { false };
@@ -894,6 +942,7 @@ private:
     HashTable<GC::Ptr<NodeIterator>> m_node_iterators;
 
     HashTable<GC::Ref<DocumentObserver>> m_document_observers;
+    Vector<GC::Ref<DocumentObserver>> m_document_observers_being_notified;
 
     // https://html.spec.whatwg.org/multipage/dom.html#is-initial-about:blank
     bool m_is_initial_about_blank { false };
@@ -1053,6 +1102,20 @@ private:
 
     // https://w3c.github.io/editing/docs/execCommand/#css-styling-flag
     bool m_css_styling_flag { false };
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    HashMap<FlyString, bool> m_command_state_override;
+
+    // https://w3c.github.io/editing/docs/execCommand/#value-override
+    HashMap<FlyString, String> m_command_value_override;
+
+    // https://html.spec.whatwg.org/multipage/webstorage.html#session-storage-holder
+    // A Document object has an associated session storage holder, which is null or a Storage object. It is initially null.
+    GC::Ptr<HTML::Storage> m_session_storage_holder;
+
+    // https://html.spec.whatwg.org/multipage/webstorage.html#local-storage-holder
+    // A Document object has an associated local storage holder, which is null or a Storage object. It is initially null.
+    GC::Ptr<HTML::Storage> m_local_storage_holder;
 };
 
 template<>

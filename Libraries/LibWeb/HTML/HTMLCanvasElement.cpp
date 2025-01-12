@@ -65,7 +65,17 @@ void HTMLCanvasElement::visit_edges(Cell::Visitor& visitor)
         });
 }
 
-void HTMLCanvasElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLCanvasElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::width,
+        HTML::AttributeNames::height);
+}
+
+void HTMLCanvasElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     // https://html.spec.whatwg.org/multipage/rendering.html#attributes-for-embedded-content-and-images
     // The width and height attributes map to the aspect-ratio property on canvas elements.
@@ -79,7 +89,7 @@ void HTMLCanvasElement::apply_presentational_hints(CSS::StyleProperties& style) 
 
     if (w.has_value() && h.has_value())
         // then the user agent is expected to use the parsed integers as a presentational hint for the 'aspect-ratio' property of the form auto w / h.
-        style.set_property(CSS::PropertyID::AspectRatio,
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::AspectRatio,
             CSS::StyleValueList::create(CSS::StyleValueVector {
                                             CSS::CSSKeywordValue::create(CSS::Keyword::Auto),
                                             CSS::RatioStyleValue::create(CSS::Ratio { static_cast<double>(w.value()), static_cast<double>(h.value()) }) },
@@ -175,12 +185,22 @@ WebIDL::ExceptionOr<void> HTMLCanvasElement::set_height(WebIDL::UnsignedLong val
     return {};
 }
 
-GC::Ptr<Layout::Node> HTMLCanvasElement::create_layout_node(CSS::StyleProperties style)
+void HTMLCanvasElement::attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_)
+{
+    Base::attribute_changed(local_name, old_value, value, namespace_);
+
+    if (local_name.equals_ignoring_ascii_case(HTML::AttributeNames::width) || local_name.equals_ignoring_ascii_case(HTML::AttributeNames::height)) {
+        notify_context_about_canvas_size_change();
+        reset_context_to_default_state();
+    }
+}
+
+GC::Ptr<Layout::Node> HTMLCanvasElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
 {
     return heap().allocate<Layout::CanvasBox>(document(), *this, move(style));
 }
 
-void HTMLCanvasElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLCanvasElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())
@@ -375,8 +395,8 @@ WebIDL::ExceptionOr<void> HTMLCanvasElement::to_blob(GC::Ref<WebIDL::CallbackTyp
                 if (file_result.has_value())
                     blob_result = FileAPI::Blob::create(realm(), file_result->buffer, TRY_OR_THROW_OOM(vm(), String::from_utf8(file_result->mime_type)));
 
-                // 2. Invoke callback with « result ».
-                TRY(WebIDL::invoke_callback(*callback, {}, move(blob_result)));
+                // 2. Invoke callback with « result » and "report".
+                TRY(WebIDL::invoke_callback(*callback, {}, WebIDL::ExceptionBehavior::Report, move(blob_result)));
                 return {};
             });
             if (maybe_error.is_throw_completion())

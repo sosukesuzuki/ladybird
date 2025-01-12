@@ -22,6 +22,7 @@
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Dump.h>
+#include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/FormattingContext.h>
@@ -204,7 +205,7 @@ bool Node::establishes_stacking_context() const
     // [CSS21] and a Containing Block for absolute and fixed position descendants, unless the
     // element it applies to is a document root element in the current browsing context.
     // Spec Note: This rule works in the same way as for the filter property.
-    if (!computed_values().backdrop_filter().is_none() || !computed_values().filter().is_none())
+    if (!computed_values().backdrop_filter().is_empty() || !computed_values().filter().is_empty())
         return true;
 
     // Element with any of the following properties with value other than none:
@@ -276,7 +277,7 @@ bool Node::is_sticky_position() const
     return position == CSS::Positioning::Sticky;
 }
 
-NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, CSS::StyleProperties computed_style)
+NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedProperties> computed_style)
     : Node(document, node)
     , m_computed_values(make<CSS::ComputedValues>())
 {
@@ -324,11 +325,19 @@ static CSSPixels snap_a_length_as_a_border_width(double device_pixels_per_css_pi
     return length;
 }
 
-void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
+void NodeWithStyle::apply_style(const CSS::ComputedProperties& computed_style)
 {
     auto& computed_values = mutable_computed_values();
 
-    // NOTE: color must be set first to ensure currentColor can be resolved in other properties (e.g. background-color).
+    // NOTE: color-scheme must be set first to ensure system colors can be resolved correctly.
+    auto preferred_color_scheme = document().page().preferred_color_scheme();
+    // FIXME: We can't just check for Auto because page().preferred_color_scheme() returns garbage data after startup.
+    if (preferred_color_scheme != CSS::PreferredColorScheme::Dark && preferred_color_scheme != CSS::PreferredColorScheme::Light) {
+        preferred_color_scheme = document().page().palette().is_dark() ? CSS::PreferredColorScheme::Dark : CSS::PreferredColorScheme::Light;
+    }
+    computed_values.set_color_scheme(computed_style.color_scheme(preferred_color_scheme, document().supported_color_schemes()));
+
+    // NOTE: color must be set second to ensure currentColor can be resolved in other properties (e.g. background-color).
     computed_values.set_color(computed_style.color_or_fallback(CSS::PropertyID::Color, *this, CSS::InitialValues::color()));
 
     // NOTE: We have to be careful that font-related properties get set in the right order.
@@ -428,13 +437,13 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
 
             if (auto position_value = value_for_layer(x_positions, layer_index); position_value && position_value->is_edge()) {
                 auto& position = position_value->as_edge();
-                layer.position_edge_x = position.edge();
+                layer.position_edge_x = position.edge().value_or(CSS::PositionEdge::Left);
                 layer.position_offset_x = position.offset();
             }
 
             if (auto position_value = value_for_layer(y_positions, layer_index); position_value && position_value->is_edge()) {
                 auto& position = position_value->as_edge();
-                layer.position_edge_y = position.edge();
+                layer.position_edge_y = position.edge().value_or(CSS::PositionEdge::Top);
                 layer.position_offset_y = position.offset();
             };
 
@@ -473,12 +482,24 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
     if (auto box_sizing = computed_style.box_sizing(); box_sizing.has_value())
         computed_values.set_box_sizing(box_sizing.release_value());
 
-    if (auto maybe_font_variant = computed_style.font_variant(); maybe_font_variant.has_value())
-        computed_values.set_font_variant(maybe_font_variant.release_value());
     if (auto maybe_font_language_override = computed_style.font_language_override(); maybe_font_language_override.has_value())
         computed_values.set_font_language_override(maybe_font_language_override.release_value());
     if (auto maybe_font_feature_settings = computed_style.font_feature_settings(); maybe_font_feature_settings.has_value())
         computed_values.set_font_feature_settings(maybe_font_feature_settings.release_value());
+    if (auto maybe_font_variant_alternates = computed_style.font_variant_alternates(); maybe_font_variant_alternates.has_value())
+        computed_values.set_font_variant_alternates(maybe_font_variant_alternates.release_value());
+    if (auto maybe_font_variant_caps = computed_style.font_variant_caps(); maybe_font_variant_caps.has_value())
+        computed_values.set_font_variant_caps(maybe_font_variant_caps.release_value());
+    if (auto maybe_font_variant_east_asian = computed_style.font_variant_east_asian(); maybe_font_variant_east_asian.has_value())
+        computed_values.set_font_variant_east_asian(maybe_font_variant_east_asian.release_value());
+    if (auto maybe_font_variant_emoji = computed_style.font_variant_emoji(); maybe_font_variant_emoji.has_value())
+        computed_values.set_font_variant_emoji(maybe_font_variant_emoji.release_value());
+    if (auto maybe_font_variant_ligatures = computed_style.font_variant_ligatures(); maybe_font_variant_ligatures.has_value())
+        computed_values.set_font_variant_ligatures(maybe_font_variant_ligatures.release_value());
+    if (auto maybe_font_variant_numeric = computed_style.font_variant_numeric(); maybe_font_variant_numeric.has_value())
+        computed_values.set_font_variant_numeric(maybe_font_variant_numeric.release_value());
+    if (auto maybe_font_variant_position = computed_style.font_variant_position(); maybe_font_variant_position.has_value())
+        computed_values.set_font_variant_position(maybe_font_variant_position.release_value());
     if (auto maybe_font_variation_settings = computed_style.font_variation_settings(); maybe_font_variation_settings.has_value())
         computed_values.set_font_variation_settings(maybe_font_variation_settings.release_value());
 
@@ -529,31 +550,31 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
     computed_values.set_order(computed_style.order());
     computed_values.set_clip(computed_style.clip());
 
-    auto resolve_filter = [this](CSS::Filter const& computed_filter) -> CSS::ResolvedFilter {
-        CSS::ResolvedFilter resolved_filter;
+    auto resolve_filter = [this](CSS::Filter const& computed_filter) -> Vector<Gfx::Filter> {
+        Vector<Gfx::Filter> resolved_filter;
         for (auto const& filter : computed_filter.filters()) {
             filter.visit(
                 [&](CSS::FilterOperation::Blur const& blur) {
-                    resolved_filter.filters.append(CSS::ResolvedFilter::Blur {
+                    resolved_filter.append(Gfx::BlurFilter {
                         .radius = blur.resolved_radius(*this) });
                 },
                 [&](CSS::FilterOperation::DropShadow const& drop_shadow) {
                     auto context = CSS::Length::ResolutionContext::for_layout_node(*this);
                     // The default value for omitted values is missing length values set to 0
                     // and the missing used color is taken from the color property.
-                    resolved_filter.filters.append(CSS::ResolvedFilter::DropShadow {
-                        .offset_x = drop_shadow.offset_x.resolved(context).to_px(*this).to_double(),
-                        .offset_y = drop_shadow.offset_y.resolved(context).to_px(*this).to_double(),
-                        .radius = drop_shadow.radius.has_value() ? drop_shadow.radius->resolved(context).to_px(*this).to_double() : 0.0,
+                    resolved_filter.append(Gfx::DropShadowFilter {
+                        .offset_x = static_cast<float>(drop_shadow.offset_x.resolved(context).to_px(*this).to_double()),
+                        .offset_y = static_cast<float>(drop_shadow.offset_y.resolved(context).to_px(*this).to_double()),
+                        .radius = static_cast<float>(drop_shadow.radius.has_value() ? drop_shadow.radius->resolved(context).to_px(*this).to_double() : 0.0),
                         .color = drop_shadow.color.has_value() ? *drop_shadow.color : this->computed_values().color() });
                 },
                 [&](CSS::FilterOperation::Color const& color_operation) {
-                    resolved_filter.filters.append(CSS::ResolvedFilter::Color {
+                    resolved_filter.append(Gfx::ColorFilter {
                         .type = color_operation.operation,
                         .amount = color_operation.resolved_amount() });
                 },
                 [&](CSS::FilterOperation::HueRotate const& hue_rotate) {
-                    resolved_filter.filters.append(CSS::ResolvedFilter::HueRotate { .angle_degrees = hue_rotate.angle_degrees(*this) });
+                    resolved_filter.append(Gfx::HueRotateFilter { .angle_degrees = hue_rotate.angle_degrees(*this) });
                 });
         }
         return resolved_filter;
@@ -742,8 +763,8 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
     if (transition_delay_property.is_time()) {
         auto const& transition_delay = transition_delay_property.as_time();
         computed_values.set_transition_delay(transition_delay.time());
-    } else if (transition_delay_property.is_math()) {
-        auto const& transition_delay = transition_delay_property.as_math();
+    } else if (transition_delay_property.is_calculated()) {
+        auto const& transition_delay = transition_delay_property.as_calculated();
         computed_values.set_transition_delay(transition_delay.resolve_time().value());
     }
 
@@ -764,8 +785,8 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
         } else {
             auto resolve_border_width = [&]() -> CSSPixels {
                 auto const& value = computed_style.property(width_property);
-                if (value.is_math())
-                    return max(CSSPixels { 0 }, value.as_math().resolve_length(*this)->to_px(*this));
+                if (value.is_calculated())
+                    return max(CSSPixels { 0 }, value.as_calculated().resolve_length(*this)->to_px(*this));
                 if (value.is_length())
                     return value.as_length().length().to_px(*this);
                 if (value.is_keyword()) {
@@ -885,8 +906,8 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
                 dashes.append(CSS::LengthPercentage { value->as_length().length() });
             else if (value->is_percentage())
                 dashes.append(CSS::LengthPercentage { value->as_percentage().percentage() });
-            else if (value->is_math())
-                dashes.append(CSS::LengthPercentage { value->as_math() });
+            else if (value->is_calculated())
+                dashes.append(CSS::LengthPercentage { value->as_calculated() });
             else if (value->is_number())
                 dashes.append(CSS::NumberOrCalculated { value->as_number().number() });
         }
@@ -983,6 +1004,9 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& computed_style)
 
     if (auto writing_mode = computed_style.writing_mode(); writing_mode.has_value())
         computed_values.set_writing_mode(writing_mode.value());
+
+    if (auto user_select = computed_style.user_select(); user_select.has_value())
+        computed_values.set_user_select(user_select.value());
 
     propagate_style_to_anonymous_wrappers();
 }
@@ -1192,6 +1216,55 @@ DOM::Document& Node::document()
 DOM::Document const& Node::document() const
 {
     return m_dom_node->document();
+}
+
+// https://drafts.csswg.org/css-ui/#propdef-user-select
+CSS::UserSelect Node::user_select_used_value() const
+{
+    // The used value is the same as the computed value, except:
+    auto computed_value = computed_values().user_select();
+
+    // 1. on editable elements where the used value is always 'contain' regardless of the computed value
+
+    // 2. when the computed value is 'auto', in which case the used value is one of the other values as defined below
+
+    // For the purpose of this specification, an editable element is either an editing host or a mutable form control with
+    // textual content, such as textarea.
+    auto* form_control = dynamic_cast<HTML::FormAssociatedTextControlElement const*>(dom_node());
+    // FIXME: Check if this needs to exclude input elements with types such as color or range, and if so, which ones exactly.
+    if ((dom_node() && dom_node()->is_editing_host()) || (form_control && form_control->is_mutable())) {
+        return CSS::UserSelect::Contain;
+    } else if (computed_value == CSS::UserSelect::Auto) {
+        // The used value of 'auto' is determined as follows:
+        // - On the '::before' and '::after' pseudo-elements, the used value is 'none'
+        if (is_generated_for_before_pseudo_element() || is_generated_for_after_pseudo_element()) {
+            return CSS::UserSelect::None;
+        }
+
+        // - If the element is an editable element, the used value is 'contain'
+        // NOTE: We already handled this above.
+
+        auto parent_element = parent();
+        if (parent_element) {
+            auto parent_used_value = parent_element->user_select_used_value();
+
+            // - Otherwise, if the used value of user-select on the parent of this element is 'all', the used value is 'all'
+            if (parent_used_value == CSS::UserSelect::All) {
+                return CSS::UserSelect::All;
+            }
+
+            // - Otherwise, if the used value of user-select on the parent of this element is 'none', the used value is
+            //   'none'
+            if (parent_used_value == CSS::UserSelect::None) {
+                return CSS::UserSelect::None;
+            }
+        }
+
+        // - Otherwise, the used value is 'text'
+        return CSS::UserSelect::Text;
+    }
+
+    return computed_value;
 }
 
 }

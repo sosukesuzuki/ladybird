@@ -122,7 +122,7 @@ WebIDL::ExceptionOr<GC::Ref<Infrastructure::FetchController>> fetch(JS::Realm& r
 
     // 8. If request’s body is a byte sequence, then set request’s body to request’s body as a body.
     if (auto const* buffer = request.body().get_pointer<ByteBuffer>())
-        request.set_body(TRY(Infrastructure::byte_sequence_as_body(realm, buffer->bytes())));
+        request.set_body(Infrastructure::byte_sequence_as_body(realm, buffer->bytes()));
 
     // 9. If request’s window is "client", then set request’s window to request’s client, if request’s client’s global
     //    object is a Window object; otherwise "no-window".
@@ -568,7 +568,7 @@ WebIDL::ExceptionOr<GC::Ptr<PendingResponse>> main_fetch(JS::Realm& realm, Infra
                 }
 
                 // 3. Let processBody given bytes be these steps:
-                auto process_body = GC::create_function(vm.heap(), [&realm, request, response, &fetch_params, process_body_error = move(process_body_error)](ByteBuffer bytes) {
+                auto process_body = GC::create_function(vm.heap(), [&realm, request, response, &fetch_params, process_body_error](ByteBuffer bytes) {
                     // 1. If bytes do not match request’s integrity metadata, then run processBodyError and abort these steps.
                     if (!TRY_OR_IGNORE(SRI::do_bytes_match_metadata_list(bytes, request->integrity_metadata()))) {
                         process_body_error->function()({});
@@ -576,7 +576,7 @@ WebIDL::ExceptionOr<GC::Ptr<PendingResponse>> main_fetch(JS::Realm& realm, Infra
                     }
 
                     // 2. Set response’s body to bytes as a body.
-                    response->set_body(TRY_OR_IGNORE(Infrastructure::byte_sequence_as_body(realm, bytes)));
+                    response->set_body(Infrastructure::byte_sequence_as_body(realm, bytes));
 
                     // 3. Run fetch response handover given fetchParams and response.
                     fetch_response_handover(realm, fetch_params, *response);
@@ -741,12 +741,10 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
             process_response_end_of_body();
             return WebIDL::create_resolved_promise(realm, JS::js_undefined());
         });
-        Streams::transform_stream_set_up(transform_stream, identity_transform_algorithm, flush_algorithm);
+        transform_stream->set_up(identity_transform_algorithm, flush_algorithm);
 
         // 4. Set internalResponse’s body’s stream to the result of internalResponse’s body’s stream piped through transformStream.
-        auto promise = Streams::readable_stream_pipe_to(internal_response->body()->stream(), transform_stream->writable(), false, false, false, {});
-        WebIDL::mark_promise_as_handled(*promise);
-        internal_response->body()->set_stream(transform_stream->readable());
+        internal_response->body()->set_stream(internal_response->body()->stream()->piped_through(transform_stream));
     }
 
     // 8. If fetchParams’s process response consume body is non-null, then:
@@ -766,7 +764,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
         // 3. If internalResponse's body is null, then queue a fetch task to run processBody given null, with
         //    fetchParams’s task destination.
         if (!internal_response->body()) {
-            Infrastructure::queue_fetch_task(fetch_params.controller(), task_destination, GC::create_function(vm.heap(), [process_body = move(process_body)]() {
+            Infrastructure::queue_fetch_task(fetch_params.controller(), task_destination, GC::create_function(vm.heap(), [process_body]() {
                 process_body->function()({});
             }));
         }
@@ -807,7 +805,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> scheme_fetch(JS::Realm& realm, Inf
             auto header = Infrastructure::Header::from_string_pair("Content-Type"sv, "text/html;charset=utf-8"sv);
             response->header_list()->append(move(header));
 
-            response->set_body(MUST(Infrastructure::byte_sequence_as_body(realm, ""sv.bytes())));
+            response->set_body(Infrastructure::byte_sequence_as_body(realm, ""sv.bytes()));
             return PendingResponse::create(vm, request, response);
         }
 
@@ -845,13 +843,13 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> scheme_fetch(JS::Realm& realm, Inf
         // 8. If request’s header list does not contain `Range`:
         if (!request->header_list()->contains("Range"sv.bytes())) {
             // 1. Let bodyWithType be the result of safely extracting blob.
-            auto body_with_type = TRY(safely_extract_body(realm, blob->raw_bytes()));
+            auto body_with_type = safely_extract_body(realm, blob->raw_bytes());
 
             // 2. Set response’s status message to `OK`.
             response->set_status_message(MUST(ByteBuffer::copy("OK"sv.bytes())));
 
             // 3. Set response’s body to bodyWithType’s body.
-            response->set_body(move(body_with_type.body));
+            response->set_body(body_with_type.body);
 
             // 4. Set response’s header list to « (`Content-Length`, serializedFullLength), (`Content-Type`, type) ».
             auto content_length_header = Infrastructure::Header::from_string_pair("Content-Length"sv, serialized_full_length);
@@ -903,7 +901,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> scheme_fetch(JS::Realm& realm, Inf
             auto sliced_blob = TRY(blob->slice(*range_start, *range_end + 1, type));
 
             // 9. Let slicedBodyWithType be the result of safely extracting slicedBlob.
-            auto sliced_body_with_type = TRY(safely_extract_body(realm, sliced_blob->raw_bytes()));
+            auto sliced_body_with_type = safely_extract_body(realm, sliced_blob->raw_bytes());
 
             // 10. Set response’s body to slicedBodyWithType’s body.
             response->set_body(sliced_body_with_type.body);
@@ -958,7 +956,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> scheme_fetch(JS::Realm& realm, Inf
         auto header = Infrastructure::Header::from_string_pair("Content-Type"sv, mime_type);
         response->header_list()->append(move(header));
 
-        response->set_body(TRY(Infrastructure::byte_sequence_as_body(realm, data_url_struct.value().body)));
+        response->set_body(Infrastructure::byte_sequence_as_body(realm, data_url_struct.value().body));
         return PendingResponse::create(vm, request, response);
     }
     // -> "file"
@@ -1308,8 +1306,8 @@ WebIDL::ExceptionOr<GC::Ptr<PendingResponse>> http_redirect_fetch(JS::Realm& rea
         auto converted_source = source.has<ByteBuffer>()
             ? BodyInitOrReadableBytes { source.get<ByteBuffer>() }
             : BodyInitOrReadableBytes { source.get<GC::Root<FileAPI::Blob>>() };
-        auto [body, _] = TRY(safely_extract_body(realm, converted_source));
-        request->set_body(move(body));
+        auto [body, _] = safely_extract_body(realm, converted_source);
+        request->set_body(body);
     }
 
     // 15. Let timingInfo be fetchParams’s timing info.
@@ -1351,7 +1349,7 @@ WebIDL::ExceptionOr<GC::Ptr<PendingResponse>> http_redirect_fetch(JS::Realm& rea
 class CachePartition : public RefCounted<CachePartition> {
 public:
     // https://httpwg.org/specs/rfc9111.html#constructing.responses.from.caches
-    GC::Ptr<Infrastructure::Response> select_response(URL::URL const& url, ReadonlyBytes method, Vector<Infrastructure::Header> const& headers, Vector<GC::Ptr<Infrastructure::Response>>& initial_set_of_stored_responses) const
+    GC::Ptr<Infrastructure::Response> select_response(JS::Realm& realm, URL::URL const& url, ReadonlyBytes method, Vector<Infrastructure::Header> const& headers, Vector<GC::Ptr<Infrastructure::Response>>& initial_set_of_stored_responses) const
     {
         // When presented with a request, a cache MUST NOT reuse a stored response unless:
 
@@ -1374,7 +1372,7 @@ public:
 
         // FIXME: - the stored response does not contain the no-cache directive (Section 5.2.2.4), unless it is successfully validated (Section 4.3), and
 
-        initial_set_of_stored_responses.append(cached_response);
+        initial_set_of_stored_responses.append(*cached_response);
 
         // FIXME: - the stored response is one of the following:
         //          + fresh (see Section 4.2), or
@@ -1383,7 +1381,7 @@ public:
 
         dbgln("\033[32;1mHTTP CACHE HIT!\033[0m {}", url);
 
-        return cached_response;
+        return cached_response->clone(realm);
     }
 
     void store_response(JS::Realm& realm, Infrastructure::Request const& http_request, Infrastructure::Response const& response)
@@ -1584,7 +1582,7 @@ private:
         return true;
     }
 
-    HashMap<URL::URL, GC::Ptr<Infrastructure::Response>> m_cache;
+    HashMap<URL::URL, GC::Root<Infrastructure::Response>> m_cache;
 };
 
 class HTTPCache {
@@ -1645,7 +1643,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
 
     // 5. Let storedResponse be null.
     GC::Ptr<Infrastructure::Response> stored_response;
-    Vector<GC::Ptr<Infrastructure::Response>> initial_set_of_stored_responses;
+    GC::RootVector<GC::Ptr<Infrastructure::Response>> initial_set_of_stored_responses(realm.heap());
 
     // 6. Let httpCache be null.
     // (Typeless until we actually implement it, needed for checks below)
@@ -1939,7 +1937,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
             //    validation, as per the "Constructing Responses from Caches" chapter of HTTP Caching [HTTP-CACHING],
             //    if any.
             // NOTE: As mandated by HTTP, this still takes the `Vary` header into account.
-            stored_response = http_cache->select_response(http_request->current_url(), http_request->method(), *http_request->header_list(), initial_set_of_stored_responses);
+            stored_response = http_cache->select_response(realm, http_request->current_url(), http_request->method(), *http_request->header_list(), initial_set_of_stored_responses);
             // 2. If storedResponse is non-null, then:
             if (stored_response) {
                 // 1. If cache mode is "default", storedResponse is a stale-while-revalidate response,
@@ -2107,8 +2105,8 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
                 auto converted_source = source.has<ByteBuffer>()
                     ? BodyInitOrReadableBytes { source.get<ByteBuffer>() }
                     : BodyInitOrReadableBytes { source.get<GC::Root<FileAPI::Blob>>() };
-                auto [body, _] = TRY_OR_IGNORE(safely_extract_body(realm, converted_source));
-                request->set_body(move(body));
+                auto [body, _] = safely_extract_body(realm, converted_source);
+                request->set_body(body);
             }
 
             // 3. If request’s use-URL-credentials flag is unset or isAuthenticationFetch is true, then:
@@ -2305,7 +2303,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> nonstandard_resource_loader_file_o
         });
 
         // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
-        Streams::set_up_readable_stream_controller_with_byte_reading_support(stream, pull_algorithm, cancel_algorithm);
+        stream->set_up_with_byte_reading_support(pull_algorithm, cancel_algorithm);
 
         auto on_headers_received = GC::create_function(vm.heap(), [&vm, request, pending_response, stream](HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase) {
             (void)request;
@@ -2330,7 +2328,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> nonstandard_resource_loader_file_o
             }
 
             for (auto const& [name, value] : response_headers.headers()) {
-                auto header = Infrastructure::Header::from_string_pair(name, value);
+                auto header = Infrastructure::Header::from_latin1_pair(name, value);
                 response->header_list()->append(move(header));
             }
 
@@ -2396,7 +2394,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> nonstandard_resource_loader_file_o
             response->set_status(status_code.value_or(200));
             response->set_body(move(body));
             for (auto const& [name, value] : response_headers.headers()) {
-                auto header = Infrastructure::Header::from_string_pair(name, value);
+                auto header = Infrastructure::Header::from_latin1_pair(name, value);
                 response->header_list()->append(move(header));
             }
 
@@ -2421,7 +2419,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> nonstandard_resource_loader_file_o
                 auto [body, _] = TRY_OR_IGNORE(extract_body(realm, data));
                 response->set_body(move(body));
                 for (auto const& [name, value] : response_headers.headers()) {
-                    auto header = Infrastructure::Header::from_string_pair(name, value);
+                    auto header = Infrastructure::Header::from_latin1_pair(name, value);
                     response->header_list()->append(move(header));
                 }
 

@@ -41,11 +41,11 @@ WebIDL::ExceptionOr<GC::Ref<DynamicsCompressorNode>> DynamicsCompressorNode::con
 
 DynamicsCompressorNode::DynamicsCompressorNode(JS::Realm& realm, GC::Ref<BaseAudioContext> context, DynamicsCompressorOptions const& options)
     : AudioNode(realm, context)
-    , m_threshold(AudioParam::create(realm, options.threshold, -100, 0, Bindings::AutomationRate::KRate))
-    , m_knee(AudioParam::create(realm, options.knee, 0, 40, Bindings::AutomationRate::KRate))
-    , m_ratio(AudioParam::create(realm, options.ratio, 1, 20, Bindings::AutomationRate::KRate))
-    , m_attack(AudioParam::create(realm, options.attack, 0, 1, Bindings::AutomationRate::KRate))
-    , m_release(AudioParam::create(realm, options.release, 0, 1, Bindings::AutomationRate::KRate))
+    , m_threshold(AudioParam::create(realm, context, options.threshold, -100, 0, Bindings::AutomationRate::KRate))
+    , m_knee(AudioParam::create(realm, context, options.knee, 0, 40, Bindings::AutomationRate::KRate))
+    , m_ratio(AudioParam::create(realm, context, options.ratio, 1, 20, Bindings::AutomationRate::KRate))
+    , m_attack(AudioParam::create(realm, context, options.attack, 0, 1, Bindings::AutomationRate::KRate))
+    , m_release(AudioParam::create(realm, context, options.release, 0, 1, Bindings::AutomationRate::KRate))
 {
 }
 
@@ -81,11 +81,9 @@ WebIDL::ExceptionOr<void> DynamicsCompressorNode::set_channel_count_mode(Binding
 WebIDL::ExceptionOr<void> DynamicsCompressorNode::set_channel_count(WebIDL::UnsignedLong channel_count)
 {
     if (channel_count > 2) {
-        // Return a NotSupportedError if 'max' is used
         return WebIDL::NotSupportedError::create(realm(), "DynamicsCompressorNode does not support channel count greater than 2"_string);
     }
 
-    // If the mode is valid, call the base class implementation
     return AudioNode::set_channel_count(channel_count);
 }
 

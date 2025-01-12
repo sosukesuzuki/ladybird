@@ -6,7 +6,7 @@
 
 #include <LibWeb/Bindings/HTMLTableCaptionElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/HTML/HTMLTableCaptionElement.h>
 
@@ -27,14 +27,22 @@ void HTMLTableCaptionElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLTableCaptionElement);
 }
 
-// https://html.spec.whatwg.org/multipage/rendering.html#tables-2
-void HTMLTableCaptionElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLTableCaptionElement::is_presentational_hint(FlyString const& name) const
 {
-    HTMLElement::apply_presentational_hints(style);
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return name == HTML::AttributeNames::align;
+}
+
+// https://html.spec.whatwg.org/multipage/rendering.html#tables-2
+void HTMLTableCaptionElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
+{
+    HTMLElement::apply_presentational_hints(cascaded_properties);
     for_each_attribute([&](auto& name, auto& value) {
         if (name.equals_ignoring_ascii_case("align"sv)) {
             if (value == "bottom"sv)
-                style.set_property(CSS::PropertyID::CaptionSide, CSS::CSSKeywordValue::create(CSS::Keyword::Bottom));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::CaptionSide, CSS::CSSKeywordValue::create(CSS::Keyword::Bottom));
         }
     });
 }

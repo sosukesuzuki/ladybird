@@ -710,6 +710,11 @@ TEST_CASE(ECMA262_match)
             "?category=54&shippable=1&baby_age=p,0,1,3"sv, false }, // ladybird#968, ?+ should not loop forever.
         { "([^\\s]+):\\s*([^;]+);"sv, "font-family: 'Inter';"sv, true }, // optimizer bug, blindly accepting inverted char classes [^x] as atomic rewrite opportunities.
         { "(a)(?=a*\\1)"sv, "aaaa"sv, true, global_multiline.value() }, // Optimizer bug, ignoring references that weren't bound in the current or past block, ladybird#2281
+        { "[ a](b{2})"sv, "abb"sv, true }, // Optimizer bug, wrong Repeat basic block splits.
+        { "^ {0,3}(([\\`\\~])\\2{2,})\\s*([\\*_]*)\\s*([^\\*_\\s]*).*$"sv, ""sv, false }, // See above.
+        { "^(\\d{4}|[+-]\\d{6})(?:-?(\\d{2})(?:-?(\\d{2}))?)?(?:[ T]?(\\d{2}):?(\\d{2})(?::?(\\d{2})(?:[,.](\\d{1,}))?)?(?:(Z)|([+-])(\\d{2})(?::?(\\d{2}))?)?)?$"sv,
+            ""sv,
+            false, }, // See above, also ladybird#2931.
     };
     // clang-format on
 
@@ -1087,6 +1092,8 @@ TEST_CASE(optimizer_alternation)
         Tuple { "[0-9]{2}|[0-9]"sv, "92"sv, 2u },
         // Don't ForkJump to the next instruction, rerunning it would produce the same result. see ladybird#2398.
         Tuple { "(xxxxxxxxxxxxxxxxxxxxxxx|xxxxxxxxxxxxxxxxxxxxxxx)?b"sv, "xxxxxxxxxxxxxxxxxxxxxxx"sv, 0u },
+        // Don't take the jump in JumpNonEmpty with nonexistent checkpoints (also don't crash).
+        Tuple { "(?!\\d*|[g-ta-r]+|[h-l]|\\S|\\S|\\S){,9}|\\S{7,8}|\\d|(?<wnvdfimiwd>)|[c-mj-tb-o]*|\\s"sv, "rjvogg7pm|li4nmct mjb2|pk7s8e0"sv, 0u },
     };
 
     for (auto& test : tests) {

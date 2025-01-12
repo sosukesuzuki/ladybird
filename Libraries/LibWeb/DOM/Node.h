@@ -58,6 +58,11 @@ enum class IsDescendant {
     Yes,
 };
 
+enum class ShouldComputeRole {
+    No,
+    Yes,
+};
+
 #define ENUMERATE_STYLE_INVALIDATION_REASONS(X)     \
     X(ActiveElementChange)                          \
     X(AdoptedStyleSheetsList)                       \
@@ -71,8 +76,10 @@ enum class IsDescendant {
     X(ElementSetShadowRoot)                         \
     X(FocusedElementChange)                         \
     X(HTMLHyperlinkElementHrefChange)               \
+    X(HTMLIFrameElementGeometryChange)              \
     X(HTMLInputElementSetChecked)                   \
     X(HTMLObjectElementUpdateLayoutAndChildObjects) \
+    X(HTMLOptionElementSelectedChange)              \
     X(HTMLSelectElementSetIsOpen)                   \
     X(Hover)                                        \
     X(MediaQueryChangedMatchState)                  \
@@ -137,7 +144,9 @@ public:
     // NOTE: This is intended for the JS bindings.
     u16 node_type() const { return (u16)m_type; }
 
-    virtual bool is_editable() const;
+    bool is_editable() const;
+    bool is_editing_host() const;
+    bool is_editable_or_editing_host() const { return is_editable() || is_editing_host(); }
 
     virtual bool is_dom_node() const final { return true; }
     virtual bool is_html_element() const { return false; }
@@ -162,6 +171,7 @@ public:
     virtual bool is_html_object_element() const { return false; }
     virtual bool is_html_form_element() const { return false; }
     virtual bool is_html_image_element() const { return false; }
+    virtual bool is_html_iframe_element() const { return false; }
     virtual bool is_navigable_container() const { return false; }
     virtual bool is_lazy_loading() const { return false; }
 
@@ -189,8 +199,9 @@ public:
 
     WebIDL::ExceptionOr<GC::Ref<Node>> replace_child(GC::Ref<Node> node, GC::Ref<Node> child);
 
-    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node(Document* document = nullptr, bool clone_children = false);
-    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node_binding(bool deep);
+    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node(Document* document = nullptr, bool subtree = false, Node* parent = nullptr) const;
+    WebIDL::ExceptionOr<GC::Ref<Node>> clone_single_node(Document&) const;
+    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node_binding(bool subtree);
 
     // NOTE: This is intended for the JS bindings.
     bool has_child_nodes() const { return has_children(); }
@@ -248,10 +259,11 @@ public:
     Element const* parent_element() const;
 
     virtual void inserted();
+    virtual void post_connection();
     virtual void removed_from(Node*);
     virtual void children_changed() { }
     virtual void adopted_from(Document&) { }
-    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) { return {}; }
+    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const { return {}; }
 
     Layout::Node const* layout_node() const { return m_layout_node; }
     Layout::Node* layout_node() { return m_layout_node; }
@@ -271,6 +283,9 @@ public:
 
     bool needs_style_update() const { return m_needs_style_update; }
     void set_needs_style_update(bool);
+
+    bool needs_inherited_style_update() const { return m_needs_inherited_style_update; }
+    void set_needs_inherited_style_update(bool);
 
     bool child_needs_style_update() const { return m_child_needs_style_update; }
     void set_child_needs_style_update(bool b) { m_child_needs_style_update = b; }
@@ -384,39 +399,6 @@ public:
         for (auto* node = previous_sibling(); node; node = node->previous_sibling())
             ++index;
         return index;
-    }
-
-    Optional<size_t> index_of_child(Node const& search_child)
-    {
-        VERIFY(search_child.parent() == this);
-        size_t index = 0;
-        auto* child = first_child();
-        VERIFY(child);
-
-        do {
-            if (child == &search_child)
-                return index;
-            index++;
-        } while (child && (child = child->next_sibling()));
-        return {};
-    }
-
-    template<typename ChildType>
-    Optional<size_t> index_of_child(Node const& search_child)
-    {
-        VERIFY(search_child.parent() == this);
-        size_t index = 0;
-        auto* child = first_child();
-        VERIFY(child);
-
-        do {
-            if (!is<ChildType>(child))
-                continue;
-            if (child == &search_child)
-                return index;
-            index++;
-        } while (child && (child = child->next_sibling()));
-        return {};
     }
 
     bool is_ancestor_of(Node const&) const;
@@ -609,6 +591,36 @@ public:
     }
 
     template<typename Callback>
+    void for_each_ancestor(Callback callback) const
+    {
+        return const_cast<Node*>(this)->for_each_ancestor(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_ancestor(Callback callback)
+    {
+        for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
+            if (callback(*ancestor) == IterationDecision::Break)
+                break;
+        }
+    }
+
+    template<typename Callback>
+    void for_each_inclusive_ancestor(Callback callback) const
+    {
+        return const_cast<Node*>(this)->for_each_inclusive_ancestor(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_inclusive_ancestor(Callback callback)
+    {
+        for (auto* ancestor = this; ancestor; ancestor = ancestor->parent()) {
+            if (callback(*ancestor) == IterationDecision::Break)
+                break;
+        }
+    }
+
+    template<typename Callback>
     void for_each_child(Callback callback) const
     {
         return const_cast<Node*>(this)->for_each_child(move(callback));
@@ -756,7 +768,7 @@ public:
         return false;
     }
 
-    ErrorOr<String> accessible_name(Document const&) const;
+    ErrorOr<String> accessible_name(Document const&, ShouldComputeRole = ShouldComputeRole::Yes) const;
     ErrorOr<String> accessible_description(Document const&) const;
 
     Optional<String> locate_a_namespace(Optional<String> const& prefix) const;
@@ -768,6 +780,8 @@ protected:
     Node(JS::Realm&, Document&, NodeType);
     Node(Document&, NodeType);
 
+    void set_document(Document&);
+
     virtual void visit_edges(Cell::Visitor&) override;
     virtual void finalize() override;
 
@@ -776,6 +790,7 @@ protected:
     GC::Ptr<Painting::Paintable> m_paintable;
     NodeType m_type { NodeType::INVALID };
     bool m_needs_style_update { false };
+    bool m_needs_inherited_style_update { false };
     bool m_child_needs_style_update { false };
 
     UniqueNodeID m_unique_id;
@@ -786,7 +801,7 @@ protected:
 
     void build_accessibility_tree(AccessibilityTreeNode& parent);
 
-    ErrorOr<String> name_or_description(NameOrDescription, Document const&, HashTable<UniqueNodeID>&, IsDescendant = IsDescendant::No) const;
+    ErrorOr<String> name_or_description(NameOrDescription, Document const&, HashTable<UniqueNodeID>&, IsDescendant = IsDescendant::No, ShouldComputeRole = ShouldComputeRole::Yes) const;
 
 private:
     void queue_tree_mutation_record(Vector<GC::Root<Node>> added_nodes, Vector<GC::Root<Node>> removed_nodes, Node* previous_sibling, Node* next_sibling);

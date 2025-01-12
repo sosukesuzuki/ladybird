@@ -63,12 +63,12 @@ void HTMLVideoElement::attribute_changed(FlyString const& name, Optional<String>
     }
 }
 
-GC::Ptr<Layout::Node> HTMLVideoElement::create_layout_node(CSS::StyleProperties style)
+GC::Ptr<Layout::Node> HTMLVideoElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
 {
     return heap().allocate<Layout::VideoBox>(document(), *this, move(style));
 }
 
-void HTMLVideoElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLVideoElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())
@@ -211,7 +211,7 @@ WebIDL::ExceptionOr<void> HTMLVideoElement::determine_element_poster_frame(Optio
         });
 
         VERIFY(response->body());
-        auto empty_algorithm = GC::create_function(heap(), [](JS::Value) {});
+        auto empty_algorithm = GC::create_function(heap(), [](JS::Value) { });
 
         response->body()->fully_read(realm, on_image_data_read, empty_algorithm, GC::Ref { global });
     };

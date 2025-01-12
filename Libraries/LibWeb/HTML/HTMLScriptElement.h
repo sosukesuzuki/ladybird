@@ -43,7 +43,8 @@ public:
 
     bool is_parser_inserted() const { return !!m_parser_document; }
 
-    virtual void inserted() override;
+    virtual void children_changed() override;
+    virtual void post_connection() override;
 
     // https://html.spec.whatwg.org/multipage/scripting.html#dom-script-supports
     static bool supports(JS::VM&, StringView type)
@@ -61,6 +62,8 @@ public:
 
     [[nodiscard]] bool async() const;
     void set_async(bool);
+
+    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const override;
 
 private:
     HTMLScriptElement(DOM::Document&, DOM::QualifiedName);

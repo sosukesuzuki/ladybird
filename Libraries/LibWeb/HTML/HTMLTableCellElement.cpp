@@ -7,8 +7,8 @@
 
 #include <LibWeb/Bindings/HTMLTableCellElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
-#include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
@@ -37,45 +37,60 @@ void HTMLTableCellElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLTableCellElement);
 }
 
-void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLTableCellElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::align,
+        HTML::AttributeNames::background,
+        HTML::AttributeNames::bgcolor,
+        HTML::AttributeNames::height,
+        HTML::AttributeNames::valign,
+        HTML::AttributeNames::width);
+}
+
+void HTMLTableCellElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         if (name == HTML::AttributeNames::bgcolor) {
             // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:rules-for-parsing-a-legacy-colour-value
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
             return;
         }
         if (name == HTML::AttributeNames::valign) {
             if (auto parsed_value = parse_css_value(CSS::Parser::ParsingContext { document() }, value, CSS::PropertyID::VerticalAlign))
-                style.set_property(CSS::PropertyID::VerticalAlign, parsed_value.release_nonnull());
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::VerticalAlign, parsed_value.release_nonnull());
             return;
         }
         if (name == HTML::AttributeNames::align) {
             if (value.equals_ignoring_ascii_case("center"sv) || value.equals_ignoring_ascii_case("middle"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebCenter));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebCenter));
             } else if (value.equals_ignoring_ascii_case("left"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebLeft));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebLeft));
             } else if (value.equals_ignoring_ascii_case("right"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebRight));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebRight));
             } else {
                 if (auto parsed_value = parse_css_value(CSS::Parser::ParsingContext { document() }, value, CSS::PropertyID::TextAlign))
-                    style.set_property(CSS::PropertyID::TextAlign, parsed_value.release_nonnull());
+                    cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, parsed_value.release_nonnull());
             }
             return;
         }
         if (name == HTML::AttributeNames::width) {
             if (auto parsed_value = parse_nonzero_dimension_value(value))
-                style.set_property(CSS::PropertyID::Width, parsed_value.release_nonnull());
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Width, parsed_value.release_nonnull());
             return;
         } else if (name == HTML::AttributeNames::height) {
             if (auto parsed_value = parse_nonzero_dimension_value(value))
-                style.set_property(CSS::PropertyID::Height, parsed_value.release_nonnull());
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Height, parsed_value.release_nonnull());
             return;
         } else if (name == HTML::AttributeNames::background) {
-            if (auto parsed_value = document().parse_url(value); parsed_value.is_valid())
-                style.set_property(CSS::PropertyID::BackgroundImage, CSS::ImageStyleValue::create(parsed_value));
+            // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:encoding-parsing-and-serializing-a-url
+            if (auto parsed_value = document().encoding_parse_url(value); parsed_value.is_valid())
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundImage, CSS::ImageStyleValue::create(parsed_value));
             return;
         }
     });
@@ -85,10 +100,10 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
         return;
 
     if (auto padding = table_element->padding()) {
-        style.set_property(CSS::PropertyID::PaddingTop, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
-        style.set_property(CSS::PropertyID::PaddingBottom, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
-        style.set_property(CSS::PropertyID::PaddingLeft, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
-        style.set_property(CSS::PropertyID::PaddingRight, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::PaddingTop, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::PaddingBottom, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::PaddingLeft, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
+        cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::PaddingRight, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
     }
 
     auto border = table_element->border();
@@ -96,9 +111,9 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
     if (!border)
         return;
     auto apply_border_style = [&](CSS::PropertyID style_property, CSS::PropertyID width_property, CSS::PropertyID color_property) {
-        style.set_property(style_property, CSS::CSSKeywordValue::create(CSS::Keyword::Inset));
-        style.set_property(width_property, CSS::LengthStyleValue::create(CSS::Length::make_px(1)));
-        style.set_property(color_property, table_element->computed_css_values()->property(color_property));
+        cascaded_properties->set_property_from_presentational_hint(style_property, CSS::CSSKeywordValue::create(CSS::Keyword::Inset));
+        cascaded_properties->set_property_from_presentational_hint(width_property, CSS::LengthStyleValue::create(CSS::Length::make_px(1)));
+        cascaded_properties->set_property_from_presentational_hint(color_property, table_element->computed_properties()->property(color_property));
     };
     apply_border_style(CSS::PropertyID::BorderLeftStyle, CSS::PropertyID::BorderLeftWidth, CSS::PropertyID::BorderLeftColor);
     apply_border_style(CSS::PropertyID::BorderTopStyle, CSS::PropertyID::BorderTopWidth, CSS::PropertyID::BorderTopColor);
@@ -195,16 +210,31 @@ WebIDL::Long HTMLTableCellElement::cell_index() const
 
 Optional<ARIA::Role> HTMLTableCellElement::default_role() const
 {
-    // TODO: For td:
-    //       role=cell if the ancestor table element is exposed as a role=table
-    //       role=gridcell if the ancestor table element is exposed as a role=grid or treegrid
-    //       No corresponding role if the ancestor table element is not exposed as a role=table, grid or treegrid
-    //       For th:
-    //       role=columnheader, rowheader or cell if the ancestor table element is exposed as a role=table
-    //        role=columnheader, rowheader or gridcell if the ancestor table element is exposed as a role=grid or treegrid
-    //        No corresponding role if the ancestor table element is not exposed as a role=table, grid or treegrid
-    // https://www.w3.org/TR/html-aria/#el-td
-    // https://www.w3.org/TR/html-aria/#el-th
+    if (local_name() == TagNames::th) {
+        for (auto const* ancestor = parent_element(); ancestor; ancestor = ancestor->parent_element()) {
+            // AD-HOC: The ancestor checks here aren’t explicitly defined in the spec, but implicitly follow from what
+            // the spec does state, and from the physical placement/layout of elements. Also, the el-th and el-th-in-row
+            // tests at https://wpt.fyi/results/html-aam/table-roles.html require doing these ancestor checks — and
+            // implementing them causes the behavior to match that of other engines.
+            // https://w3c.github.io/html-aam/#el-th-columnheader
+            if (get_attribute(HTML::AttributeNames::scope) == "columnheader" || ancestor->local_name() == TagNames::thead)
+                return ARIA::Role::columnheader;
+            // https://w3c.github.io/html-aam/#el-th-rowheader
+            if (get_attribute(HTML::AttributeNames::scope) == "rowheader" || ancestor->local_name() == TagNames::tbody)
+                return ARIA::Role::rowheader;
+        }
+    }
+    auto const* table_element = first_ancestor_of_type<HTMLTableElement>();
+    // https://w3c.github.io/html-aam/#el-td
+    // https://w3c.github.io/html-aam/#el-th/
+    // (ancestor table element has table role)
+    if (table_element->role_or_default() == ARIA::Role::table)
+        return ARIA::Role::cell;
+    // https://w3c.github.io/html-aam/#el-td-gridcell
+    // https://w3c.github.io/html-aam/#el-th-gridcell
+    // (ancestor table element has grid or treegrid role)
+    if (first_is_one_of(table_element->role_or_default(), ARIA::Role::grid, ARIA::Role::gridcell))
+        return ARIA::Role::gridcell;
     return {};
 }
 

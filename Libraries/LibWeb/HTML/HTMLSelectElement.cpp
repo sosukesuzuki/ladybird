@@ -64,7 +64,7 @@ void HTMLSelectElement::visit_edges(Cell::Visitor& visitor)
     }
 }
 
-void HTMLSelectElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLSelectElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())
@@ -413,7 +413,7 @@ void HTMLSelectElement::show_the_picker_if_applicable()
             for (auto const& child : opt_group_element.children_as_vector()) {
                 if (is<HTMLOptionElement>(*child)) {
                     auto& option_element = verify_cast<HTMLOptionElement>(*child);
-                    option_group_items.append(SelectItemOption { id_counter++, option_element.selected(), option_element.disabled(), option_element, strip_newlines(option_element.text_content()), option_element.value() });
+                    option_group_items.append(SelectItemOption { id_counter++, option_element.selected(), option_element.disabled(), option_element, strip_newlines(option_element.label()), option_element.value() });
                 }
             }
             m_select_items.append(SelectItemOptionGroup { opt_group_element.get_attribute(AttributeNames::label).value_or(String {}), option_group_items });
@@ -421,7 +421,7 @@ void HTMLSelectElement::show_the_picker_if_applicable()
 
         if (is<HTMLOptionElement>(*child)) {
             auto& option_element = verify_cast<HTMLOptionElement>(*child);
-            m_select_items.append(SelectItemOption { id_counter++, option_element.selected(), option_element.disabled(), option_element, strip_newlines(option_element.text_content()), option_element.value() });
+            m_select_items.append(SelectItemOption { id_counter++, option_element.selected(), option_element.disabled(), option_element, strip_newlines(option_element.label()), option_element.value() });
         }
 
         if (is<HTMLHRElement>(*child))
@@ -516,11 +516,11 @@ void HTMLSelectElement::form_associated_element_was_removed(DOM::Node*)
     set_shadow_root(nullptr);
 }
 
-void HTMLSelectElement::computed_css_values_changed()
+void HTMLSelectElement::computed_properties_changed()
 {
     // Hide chevron icon when appearance is none
     if (m_chevron_icon_element) {
-        auto appearance = computed_css_values()->appearance();
+        auto appearance = computed_properties()->appearance();
         if (appearance.has_value() && *appearance == CSS::Appearance::None) {
             MUST(m_chevron_icon_element->style_for_bindings()->set_property(CSS::PropertyID::Display, "none"_string));
         } else {
@@ -567,15 +567,21 @@ void HTMLSelectElement::create_shadow_tree_if_needed()
     update_inner_text_element();
 }
 
+void HTMLSelectElement::update_inner_text_element(Badge<HTMLOptionElement>)
+{
+    update_inner_text_element();
+}
+
+// FIXME: This needs to be called any time the selected option's children are modified.
 void HTMLSelectElement::update_inner_text_element()
 {
     if (!m_inner_text_element)
         return;
 
-    // Update inner text element to text content of selected option
+    // Update inner text element to the label of the selected option
     for (auto const& option_element : list_of_options()) {
         if (option_element->selected()) {
-            m_inner_text_element->set_text_content(strip_newlines(option_element->text_content()));
+            m_inner_text_element->set_text_content(strip_newlines(option_element->label()));
             return;
         }
     }

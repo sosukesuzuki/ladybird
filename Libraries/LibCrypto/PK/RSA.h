@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include <AK/Span.h>
 #include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 #include <LibCrypto/NumberTheory/ModularFunctions.h>
@@ -64,6 +63,14 @@ private:
 template<typename Integer = UnsignedBigInteger>
 class RSAPrivateKey {
 public:
+    RSAPrivateKey(Integer n, Integer d, Integer e)
+        : m_modulus(move(n))
+        , m_private_exponent(move(d))
+        , m_public_exponent(move(e))
+        , m_length(m_modulus.trimmed_length() * sizeof(u32))
+    {
+    }
+
     RSAPrivateKey(Integer n, Integer d, Integer e, Integer p, Integer q)
         : m_modulus(move(n))
         , m_private_exponent(move(d))
@@ -153,37 +160,27 @@ public:
     using KeyPairType = RSAKeyPair<PublicKeyType, PrivateKeyType>;
 
     static ErrorOr<KeyPairType> parse_rsa_key(ReadonlyBytes der, bool is_private, Vector<StringView> current_scope);
-    static KeyPairType generate_key_pair(size_t bits = 256, IntegerType e = 65537)
+    static ErrorOr<KeyPairType> generate_key_pair(size_t bits, IntegerType e = 65537);
+
+    RSA(KeyPairType const& pair)
+        : PKSystem<RSAPrivateKey<IntegerType>, RSAPublicKey<IntegerType>>(pair.public_key, pair.private_key)
     {
-        IntegerType p;
-        IntegerType q;
-        IntegerType lambda;
-
-        do {
-            p = NumberTheory::random_big_prime(bits / 2);
-            q = NumberTheory::random_big_prime(bits / 2);
-            lambda = NumberTheory::LCM(p.minus(1), q.minus(1));
-        } while (!(NumberTheory::GCD(e, lambda) == 1));
-
-        auto n = p.multiplied_by(q);
-
-        auto d = NumberTheory::ModularInverse(e, lambda);
-        RSAKeyPair<PublicKeyType, PrivateKeyType> keys {
-            { n, e },
-            { n, d, e, p, q }
-        };
-        return keys;
     }
 
-    RSA(IntegerType n, IntegerType d, IntegerType e)
-    {
-        m_public_key.set(n, e);
-        m_private_key = { n, d, e, 0, 0, 0, 0, 0 };
-    }
-
-    RSA(PublicKeyType& pubkey, PrivateKeyType& privkey)
+    RSA(PublicKeyType const& pubkey, PrivateKeyType const& privkey)
         : PKSystem<RSAPrivateKey<IntegerType>, RSAPublicKey<IntegerType>>(pubkey, privkey)
     {
+    }
+
+    RSA(PrivateKeyType const& privkey)
+    {
+        m_private_key = privkey;
+        m_public_key.set(m_private_key.modulus(), m_private_key.public_exponent());
+    }
+
+    RSA(PublicKeyType const& pubkey)
+    {
+        m_public_key = pubkey;
     }
 
     RSA(ByteBuffer const& publicKeyPEM, ByteBuffer const& privateKeyPEM)
@@ -198,19 +195,11 @@ public:
         m_public_key.set(m_private_key.modulus(), m_private_key.public_exponent());
     }
 
-    // create our own keys
-    RSA()
-    {
-        auto pair = generate_key_pair();
-        m_public_key = pair.public_key;
-        m_private_key = pair.private_key;
-    }
+    virtual ErrorOr<void> encrypt(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> decrypt(ReadonlyBytes in, Bytes& out) override;
 
-    virtual void encrypt(ReadonlyBytes in, Bytes& out) override;
-    virtual void decrypt(ReadonlyBytes in, Bytes& out) override;
-
-    virtual void sign(ReadonlyBytes in, Bytes& out) override;
-    virtual void verify(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> verify(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> sign(ReadonlyBytes in, Bytes& out) override;
 
     virtual ByteString class_name() const override
     {
@@ -243,11 +232,11 @@ public:
 
     ~RSA_PKCS1_EME() = default;
 
-    virtual void encrypt(ReadonlyBytes in, Bytes& out) override;
-    virtual void decrypt(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> encrypt(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> decrypt(ReadonlyBytes in, Bytes& out) override;
 
-    virtual void sign(ReadonlyBytes, Bytes&) override;
-    virtual void verify(ReadonlyBytes, Bytes&) override;
+    virtual ErrorOr<void> verify(ReadonlyBytes in, Bytes& out) override;
+    virtual ErrorOr<void> sign(ReadonlyBytes in, Bytes& out) override;
 
     virtual ByteString class_name() const override
     {

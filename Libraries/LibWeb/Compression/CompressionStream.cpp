@@ -55,7 +55,7 @@ WebIDL::ExceptionOr<GC::Ref<CompressionStream>> CompressionStream::construct_imp
         auto& vm = realm.vm();
 
         if (auto result = stream->compress_and_enqueue_chunk(chunk); result.is_error()) {
-            auto throw_completion = Bindings::dom_exception_to_throw_completion(vm, result.exception());
+            auto throw_completion = Bindings::exception_to_throw_completion(vm, result.exception());
             return WebIDL::create_rejected_promise(realm, *throw_completion.release_value());
         }
 
@@ -68,7 +68,7 @@ WebIDL::ExceptionOr<GC::Ref<CompressionStream>> CompressionStream::construct_imp
         auto& vm = realm.vm();
 
         if (auto result = stream->compress_flush_and_enqueue(); result.is_error()) {
-            auto throw_completion = Bindings::dom_exception_to_throw_completion(vm, result.exception());
+            auto throw_completion = Bindings::exception_to_throw_completion(vm, result.exception());
             return WebIDL::create_rejected_promise(realm, *throw_completion.release_value());
         }
 
@@ -76,7 +76,7 @@ WebIDL::ExceptionOr<GC::Ref<CompressionStream>> CompressionStream::construct_imp
     });
 
     // 6. Set up this's transform with transformAlgorithm set to transformAlgorithm and flushAlgorithm set to flushAlgorithm.
-    Streams::transform_stream_set_up(stream->m_transform, transform_algorithm, flush_algorithm);
+    stream->m_transform->set_up(transform_algorithm, flush_algorithm);
 
     return stream;
 }

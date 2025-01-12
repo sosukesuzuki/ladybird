@@ -286,7 +286,7 @@ ErrorOr<bool> Process::is_being_debugged()
     if (sysctl(mib, sizeof(mib) / sizeof(*mib), &info, &size, NULL, 0) < 0)
         return Error::from_syscall("sysctl"sv, -errno);
 
-        // We're being debugged if the P_TRACED flag is set.
+    // We're being debugged if the P_TRACED flag is set.
 #    if defined(AK_OS_MACOS)
     return ((info.kp_proc.p_flag & P_TRACED) != 0);
 #    elif defined(AK_OS_FREEBSD)
@@ -346,7 +346,7 @@ ErrorOr<int> Process::wait_for_termination()
     int exit_code = -1;
     int status;
     if (waitpid(m_pid, &status, 0) == -1)
-        return Error::from_syscall("waitpid"sv, errno);
+        return Error::from_syscall("waitpid"sv, -errno);
 
     if (WIFEXITED(status)) {
         exit_code = WEXITSTATUS(status);

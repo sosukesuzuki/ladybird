@@ -88,6 +88,8 @@ public:
     virtual CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability() const = 0;
 
     URL::URL parse_url(StringView);
+    URL::URL encoding_parse_url(StringView);
+    Optional<String> encoding_parse_and_serialize_url(StringView);
 
     JS::Realm& realm();
     JS::Object& global_object();
@@ -139,7 +141,8 @@ void prepare_to_run_callback(JS::Realm&);
 void clean_up_after_running_callback(JS::Realm const&);
 ModuleMap& module_map_of_realm(JS::Realm&);
 bool module_type_allowed(JS::Realm const&, StringView module_type);
-void disallow_further_import_maps(JS::Realm&);
+
+void add_module_to_resolved_module_set(JS::Realm&, String const& serialized_base_url, String const& normalized_specifier, Optional<URL::URL> const& as_url);
 
 EnvironmentSettingsObject& incumbent_settings_object();
 JS::Realm& incumbent_realm();
@@ -165,7 +168,6 @@ JS::Object& relevant_principal_global_object(JS::Object const&);
 JS::Realm& entry_realm();
 EnvironmentSettingsObject& entry_settings_object();
 JS::Object& entry_global_object();
-JS::VM& relevant_agent(JS::Object const&);
 [[nodiscard]] bool is_secure_context(Environment const&);
 [[nodiscard]] bool is_non_secure_context(Environment const&);
 

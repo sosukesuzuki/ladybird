@@ -324,7 +324,7 @@ GC::Ref<Streams::ReadableStream> Blob::get_stream()
     auto stream = realm.create<Streams::ReadableStream>(realm);
 
     // 2. Set up stream with byte reading support.
-    set_up_readable_stream_controller_with_byte_reading_support(stream);
+    stream->set_up_with_byte_reading_support();
 
     // FIXME: 3. Run the following steps in parallel:
     {
@@ -346,7 +346,7 @@ GC::Ref<Streams::ReadableStream> Blob::get_stream()
 
                 // 3. Enqueue chunk in stream.
                 auto maybe_error = Bindings::throw_dom_exception_if_needed(realm.vm(), [&]() {
-                    return readable_stream_enqueue(*stream->controller(), chunk);
+                    return stream->enqueue(chunk);
                 });
 
                 if (maybe_error.is_error()) {
@@ -354,9 +354,9 @@ GC::Ref<Streams::ReadableStream> Blob::get_stream()
                     return;
                 }
 
-                // FIXME: Close the stream now that we have finished enqueuing all chunks to the stream. Without this, ReadableStream.read will never resolve the second time around with 'done' set.
-                //        Nowhere in the spec seems to mention this - but testing against other implementations the stream does appear to be closed after reading all data (closed callback is fired).
-                //        Probably there is a better way of doing this.
+                // FIXME: Spec bug: https://github.com/w3c/FileAPI/issues/206
+                //
+                // We need to close the stream so that the stream will finish reading.
                 readable_stream_close(*stream);
             }));
         }
@@ -376,7 +376,7 @@ GC::Ref<WebIDL::Promise> Blob::text()
     auto stream = get_stream();
 
     // 2. Let reader be the result of getting a reader from stream. If that threw an exception, return a new promise rejected with that exception.
-    auto reader_or_exception = acquire_readable_stream_default_reader(*stream);
+    auto reader_or_exception = stream->get_a_reader();
     if (reader_or_exception.is_exception())
         return WebIDL::create_rejected_promise_from_exception(realm, reader_or_exception.release_error());
     auto reader = reader_or_exception.release_value();
@@ -405,7 +405,7 @@ GC::Ref<WebIDL::Promise> Blob::array_buffer()
     auto stream = get_stream();
 
     // 2. Let reader be the result of getting a reader from stream. If that threw an exception, return a new promise rejected with that exception.
-    auto reader_or_exception = acquire_readable_stream_default_reader(*stream);
+    auto reader_or_exception = stream->get_a_reader();
     if (reader_or_exception.is_exception())
         return WebIDL::create_rejected_promise_from_exception(realm, reader_or_exception.release_error());
     auto reader = reader_or_exception.release_value();
@@ -432,7 +432,7 @@ GC::Ref<WebIDL::Promise> Blob::bytes()
     auto stream = get_stream();
 
     // 2. Let reader be the result of getting a reader from stream. If that threw an exception, return a new promise rejected with that exception.
-    auto reader_or_exception = acquire_readable_stream_default_reader(*stream);
+    auto reader_or_exception = stream->get_a_reader();
     if (reader_or_exception.is_exception())
         return WebIDL::create_rejected_promise_from_exception(realm, reader_or_exception.release_error());
     auto reader = reader_or_exception.release_value();

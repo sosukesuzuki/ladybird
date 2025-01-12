@@ -7,6 +7,7 @@
  */
 
 #include <AK/ByteBuffer.h>
+#include <AK/Enumerate.h>
 #include <AK/Math.h>
 #include <AK/NumericLimits.h>
 #include <LibJS/Runtime/AbstractOperations.h>
@@ -152,7 +153,7 @@ inline JS::Completion clean_up_on_return(JS::Realm& stored_realm, JS::Realm& rel
 
 // https://webidl.spec.whatwg.org/#call-a-user-objects-operation
 // https://whatpr.org/webidl/1437.html#call-a-user-objects-operation
-JS::Completion call_user_object_operation(WebIDL::CallbackType& callback, String const& operation_name, Optional<JS::Value> this_argument, GC::MarkedVector<JS::Value> args)
+JS::Completion call_user_object_operation(WebIDL::CallbackType& callback, String const& operation_name, Optional<JS::Value> this_argument, GC::RootVector<JS::Value> args)
 {
     // 1. Let completion be an uninitialized variable.
     JS::Completion completion;
@@ -232,9 +233,9 @@ JS::ThrowCompletionOr<String> to_byte_string(JS::VM& vm, JS::Value value)
     auto x = TRY(value.to_string(vm));
 
     // 2. If the value of any element of x is greater than 255, then throw a TypeError.
-    for (auto character : x.code_points()) {
+    for (auto [i, character] : enumerate(x.code_points())) {
         if (character > 0xFF)
-            return vm.throw_completion<JS::TypeError>(JS::ErrorType::InvalidCodePoint);
+            return vm.throw_completion<JS::TypeError>(MUST(String::formatted("Invalid byte 0x{:X} at index {}, must be an integer no less than 0 and no greater than 0xFF", character, x.code_points().byte_offset_of(i))));
     }
 
     // 3. Return an IDL ByteString value whose length is the length of x, and where the value of each element is the value of the corresponding element of x.
@@ -254,8 +255,16 @@ JS::ThrowCompletionOr<String> to_usv_string(JS::VM& vm, JS::Value value)
 
 // https://webidl.spec.whatwg.org/#invoke-a-callback-function
 // https://whatpr.org/webidl/1437.html#invoke-a-callback-function
-JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, GC::MarkedVector<JS::Value> args)
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, ExceptionBehavior exception_behavior, GC::RootVector<JS::Value> args)
 {
+    // https://webidl.spec.whatwg.org/#js-invoking-callback-functions
+    // The exceptionBehavior argument must be supplied if, and only if, callable’s return type is not a promise type. If callable’s return type is neither undefined nor any, it must be "rethrow".
+    // NOTE: Until call sites are updated to respect this, specifications which fail to provide a value here when it would be mandatory should be understood as supplying "rethrow".
+    if (exception_behavior == ExceptionBehavior::NotSpecified && callback.operation_returns_promise == OperationReturnsPromise::No)
+        exception_behavior = ExceptionBehavior::Rethrow;
+
+    VERIFY(exception_behavior == ExceptionBehavior::NotSpecified || callback.operation_returns_promise == OperationReturnsPromise::No);
+
     // 1. Let completion be an uninitialized variable.
     JS::Completion completion;
 
@@ -275,39 +284,87 @@ JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Valu
         return { JS::js_undefined() };
     }
 
-    // 5. Let relevant realm be F’s associated Realm.
+    // 5. Let relevant realm be F’s associated realm.
     auto& relevant_realm = function_object->shape().realm();
 
-    // 6. Let stored realm be value’s callback context.
+    // 6. Let stored realm be callable’s callback context.
     auto& stored_realm = callback.callback_context;
 
-    // 8. Prepare to run script with relevant realm.
+    // 7. Prepare to run script with relevant realm.
     HTML::prepare_to_run_script(relevant_realm);
 
-    // 9. Prepare to run a callback with stored realm.
+    // 8. Prepare to run a callback with stored realm.
     HTML::prepare_to_run_callback(stored_realm);
 
-    // FIXME: 10. Let esArgs be the result of converting args to an ECMAScript arguments list. If this throws an exception, set completion to the completion value representing the thrown exception and jump to the step labeled return.
-    //        For simplicity, we currently make the caller do this. However, this means we can't throw exceptions at this point like the spec wants us to.
+    // FIXME: 9. Let jsArgs be the result of converting args to a JavaScript arguments list.
+    //           If this throws an exception, set completion to the completion value representing the thrown exception and jump to the step labeled return.
 
-    // 11. Let callResult be Call(F, thisArg, esArgs).
+    // 10. Let callResult be Call(F, thisArg, jsArgs).
     auto& vm = function_object->vm();
     auto call_result = JS::call(vm, verify_cast<JS::FunctionObject>(*function_object), this_argument.value(), args.span());
 
-    // 12. If callResult is an abrupt completion, set completion to callResult and jump to the step labeled return.
+    auto return_steps = [&](JS::Completion completion) -> JS::Completion {
+        // 1. Clean up after running a callback with stored realm.
+        HTML::clean_up_after_running_callback(stored_realm);
+
+        // 2. Clean up after running script with relevant realm.
+        // FIXME: This method follows an older version of the spec, which takes a realm, so we use F's associated realm instead.
+        HTML::clean_up_after_running_script(relevant_realm);
+
+        // 3. If completion is an IDL value, return completion.
+        if (!completion.is_abrupt())
+            return completion;
+
+        // 4. Assert: completion is an abrupt completion.
+        VERIFY(completion.is_abrupt());
+
+        // 5. If exceptionBehavior is "rethrow", throw completion.[[Value]].
+        if (exception_behavior == ExceptionBehavior::Rethrow) {
+            TRY(JS::throw_completion(*completion.release_value()));
+        }
+        // 6. Otherwise, if exceptionBehavior is "report":
+        else if (exception_behavior == ExceptionBehavior::Report) {
+            // FIXME: 1. Assert: callable’s return type is undefined or any.
+
+            // 2. Report an exception completion.[[Value]] for relevant realm’s global object.
+            auto* window_or_worker = dynamic_cast<HTML::WindowOrWorkerGlobalScopeMixin*>(&relevant_realm.global_object());
+            VERIFY(window_or_worker);
+            window_or_worker->report_an_exception(*completion.release_value());
+
+            // 3. Return the unique undefined IDL value.
+            return JS::js_undefined();
+        }
+
+        // 7. Assert: callable’s return type is a promise type.
+        VERIFY(callback.operation_returns_promise == OperationReturnsPromise::Yes);
+
+        // 8. Let rejectedPromise be ! Call(%Promise.reject%, %Promise%, «completion.[[Value]]»).
+        auto rejected_promise = create_rejected_promise(relevant_realm, *completion.release_value());
+
+        // 9. Return the result of converting rejectedPromise to the callback function’s return type.
+        return JS::Value { rejected_promise->promise() };
+    };
+
+    // 11. If callResult is an abrupt completion, set completion to callResult and jump to the step labeled return.
     if (call_result.is_throw_completion()) {
         completion = call_result.throw_completion();
-        return clean_up_on_return(stored_realm, relevant_realm, completion, callback.operation_returns_promise);
+        return return_steps(completion);
     }
 
-    // 13. Set completion to the result of converting callResult.[[Value]] to an IDL value of the same type as the operation’s return type.
+    // 12. Set completion to the result of converting callResult.[[Value]] to an IDL value of the same type as callable’s return type.
+    //     If this throws an exception, set completion to the completion value representing the thrown exception.
     // FIXME: This does no conversion.
     completion = call_result.value();
 
-    return clean_up_on_return(stored_realm, relevant_realm, completion, callback.operation_returns_promise);
+    return return_steps(completion);
 }
 
-JS::Completion construct(WebIDL::CallbackType& callback, GC::MarkedVector<JS::Value> args)
+JS::Completion invoke_callback(WebIDL::CallbackType& callback, Optional<JS::Value> this_argument, GC::RootVector<JS::Value> args)
+{
+    return invoke_callback(callback, move(this_argument), ExceptionBehavior::NotSpecified, move(args));
+}
+
+JS::Completion construct(WebIDL::CallbackType& callback, GC::RootVector<JS::Value> args)
 {
     // 1. Let completion be an uninitialized variable.
     JS::Completion completion;

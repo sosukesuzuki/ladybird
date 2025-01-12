@@ -99,7 +99,7 @@ GC::Ref<ValidityState const> HTMLInputElement::validity() const
     return realm.create<ValidityState>(realm);
 }
 
-GC::Ptr<Layout::Node> HTMLInputElement::create_layout_node(CSS::StyleProperties style)
+GC::Ptr<Layout::Node> HTMLInputElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
 {
     if (type_state() == TypeAttributeState::Hidden)
         return nullptr;
@@ -114,8 +114,8 @@ GC::Ptr<Layout::Node> HTMLInputElement::create_layout_node(CSS::StyleProperties 
     // This specification introduces the appearance property to provide some control over this behavior.
     // In particular, using appearance: none allows authors to suppress the native appearance of widgets,
     // giving them a primitive appearance where CSS can be used to restyle them.
-    if (style.appearance() == CSS::Appearance::None) {
-        return Element::create_layout_node_for_display_type(document(), style.display(), style, this);
+    if (style->appearance() == CSS::Appearance::None) {
+        return Element::create_layout_node_for_display_type(document(), style->display(), style, this);
     }
 
     if (type_state() == TypeAttributeState::SubmitButton || type_state() == TypeAttributeState::Button || type_state() == TypeAttributeState::ResetButton)
@@ -127,10 +127,10 @@ GC::Ptr<Layout::Node> HTMLInputElement::create_layout_node(CSS::StyleProperties 
     if (type_state() == TypeAttributeState::RadioButton)
         return heap().allocate<Layout::RadioButton>(document(), *this, move(style));
 
-    return Element::create_layout_node_for_display_type(document(), style.display(), style, this);
+    return Element::create_layout_node_for_display_type(document(), style->display(), style, this);
 }
 
-void HTMLInputElement::adjust_computed_style(CSS::StyleProperties& style)
+void HTMLInputElement::adjust_computed_style(CSS::ComputedProperties& style)
 {
     if (type_state() == TypeAttributeState::Hidden || type_state() == TypeAttributeState::SubmitButton || type_state() == TypeAttributeState::Button || type_state() == TypeAttributeState::ResetButton || type_state() == TypeAttributeState::ImageButton || type_state() == TypeAttributeState::Checkbox || type_state() == TypeAttributeState::RadioButton)
         return;
@@ -158,15 +158,13 @@ void HTMLInputElement::adjust_computed_style(CSS::StyleProperties& style)
         style.set_property(CSS::PropertyID::LineHeight, CSS::CSSKeywordValue::create(CSS::Keyword::Normal));
 }
 
-void HTMLInputElement::set_checked(bool checked, ChangeSource change_source)
+void HTMLInputElement::set_checked(bool checked)
 {
-    if (m_checked == checked)
-        return;
-
     // The dirty checkedness flag must be initially set to false when the element is created,
     // and must be set to true whenever the user interacts with the control in a way that changes the checkedness.
-    if (change_source == ChangeSource::User)
-        m_dirty_checkedness = true;
+    m_dirty_checkedness = true;
+    if (m_checked == checked)
+        return;
 
     m_checked = checked;
 
@@ -181,9 +179,9 @@ void HTMLInputElement::set_checked_binding(bool checked)
         if (checked)
             set_checked_within_group();
         else
-            set_checked(false, ChangeSource::Programmatic);
+            set_checked(false);
     } else {
-        set_checked(checked, ChangeSource::Programmatic);
+        set_checked(checked);
     }
 }
 
@@ -336,7 +334,7 @@ WebIDL::ExceptionOr<void> HTMLInputElement::show_picker()
     // The showPicker() method steps are:
 
     // 1. If this is not mutable, then throw an "InvalidStateError" DOMException.
-    if (!m_is_mutable)
+    if (!is_mutable())
         return WebIDL::InvalidStateError::create(realm(), "Element is not mutable"_string);
 
     // 2. If this's relevant settings object's origin is not same origin with this's relevant settings object's top-level origin,
@@ -665,6 +663,34 @@ void HTMLInputElement::update_placeholder_visibility()
     }
 }
 
+void HTMLInputElement::update_button_input_shadow_tree()
+{
+    if (m_text_node) {
+        Optional<String> label = get_attribute(HTML::AttributeNames::value);
+        if (!label.has_value()) {
+            if (type_state() == TypeAttributeState::ResetButton) {
+                // https://html.spec.whatwg.org/multipage/input.html#reset-button-state-(type=reset)
+                // If the element has a value attribute, the button's label must be the value of that attribute;
+                // otherwise, it must be an implementation-defined string that means "Reset" or some such.
+                label = "Reset"_string;
+            } else if (type_state() == TypeAttributeState::SubmitButton) {
+                // https://html.spec.whatwg.org/multipage/input.html#submit-button-state-(type=submit)
+                // If the element has a value attribute, the button's label must be the value of that attribute;
+                // otherwise, it must be an implementation-defined string that means "Submit" or some such.
+                label = "Submit"_string;
+            } else {
+                // https://html.spec.whatwg.org/multipage/input.html#button-state-(type=button)
+                // If the element has a value attribute, the button's label must be the value of that attribute;
+                // otherwise, it must be the empty string.
+                label = value();
+            }
+        }
+
+        m_text_node->set_data(label.value());
+        update_placeholder_visibility();
+    }
+}
+
 void HTMLInputElement::update_text_input_shadow_tree()
 {
     if (m_text_node) {
@@ -712,10 +738,7 @@ void HTMLInputElement::handle_maxlength_attribute()
 void HTMLInputElement::handle_readonly_attribute(Optional<String> const& maybe_value)
 {
     // The readonly attribute is a boolean attribute that controls whether or not the user can edit the form control. When specified, the element is not mutable.
-    m_is_mutable = !maybe_value.has_value() || !is_allowed_to_be_readonly(m_type);
-
-    if (m_text_node)
-        m_text_node->set_always_editable(m_is_mutable);
+    set_is_mutable(!maybe_value.has_value() || !is_allowed_to_be_readonly(m_type));
 }
 
 // https://html.spec.whatwg.org/multipage/input.html#the-input-element:attr-input-placeholder-3
@@ -809,6 +832,11 @@ void HTMLInputElement::update_shadow_tree()
     case TypeAttributeState::Range:
         update_slider_shadow_tree_elements();
         break;
+    case TypeAttributeState::Button:
+    case TypeAttributeState::ResetButton:
+    case TypeAttributeState::SubmitButton:
+        update_button_input_shadow_tree();
+        break;
     default:
         update_text_input_shadow_tree();
         break;
@@ -821,7 +849,26 @@ void HTMLInputElement::create_button_input_shadow_tree()
     set_shadow_root(shadow_root);
     auto text_container = MUST(DOM::create_element(document(), HTML::TagNames::span, Namespace::HTML));
     MUST(text_container->set_attribute(HTML::AttributeNames::style, "display: inline-block; pointer-events: none;"_string));
-    m_text_node = realm().create<DOM::Text>(document(), value());
+    Optional<String> label = get_attribute(HTML::AttributeNames::value);
+    if (!label.has_value()) {
+        if (type_state() == TypeAttributeState::ResetButton) {
+            // https://html.spec.whatwg.org/multipage/input.html#reset-button-state-(type=reset)
+            // If the element has a value attribute, the button's label must be the value of that attribute;
+            // otherwise, it must be an implementation-defined string that means "Reset" or some such.
+            label = "Reset"_string;
+        } else if (type_state() == TypeAttributeState::SubmitButton) {
+            // https://html.spec.whatwg.org/multipage/input.html#submit-button-state-(type=submit)
+            // If the element has a value attribute, the button's label must be the value of that attribute;
+            // otherwise, it must be an implementation-defined string that means "Submit" or some such.
+            label = "Submit"_string;
+        } else {
+            // https://html.spec.whatwg.org/multipage/input.html#button-state-(type=button)
+            // If the element has a value attribute, the button's label must be the value of that attribute;
+            // otherwise, it must be the empty string.
+            label = value();
+        }
+    }
+    m_text_node = realm().create<DOM::Text>(document(), label.value());
     MUST(text_container->append_child(*m_text_node));
     MUST(shadow_root->append_child(*text_container));
 }
@@ -871,12 +918,7 @@ void HTMLInputElement::create_text_input_shadow_tree()
     MUST(element->append_child(*m_inner_text_element));
 
     m_text_node = realm().create<DOM::Text>(document(), move(initial_value));
-    if (type_state() == TypeAttributeState::FileUpload) {
-        // NOTE: file upload state is mutable, but we don't allow the text node to be modifed
-        m_text_node->set_always_editable(false);
-    } else {
-        handle_readonly_attribute(attribute(HTML::AttributeNames::readonly));
-    }
+    handle_readonly_attribute(attribute(HTML::AttributeNames::readonly));
     if (type_state() == TypeAttributeState::Password)
         m_text_node->set_is_password_input({}, true);
     handle_maxlength_attribute();
@@ -907,7 +949,7 @@ void HTMLInputElement::create_text_input_shadow_tree()
 
         auto up_callback_function = JS::NativeFunction::create(
             realm(), [this](JS::VM&) {
-                if (m_is_mutable) {
+                if (is_mutable()) {
                     MUST(step_up());
                     user_interaction_did_change_input_value();
                 }
@@ -929,7 +971,7 @@ void HTMLInputElement::create_text_input_shadow_tree()
 
         auto down_callback_function = JS::NativeFunction::create(
             realm(), [this](JS::VM&) {
-                if (m_is_mutable) {
+                if (is_mutable()) {
                     MUST(step_down());
                     user_interaction_did_change_input_value();
                 }
@@ -1131,18 +1173,17 @@ void HTMLInputElement::create_range_input_shadow_tree()
     add_event_listener_without_options(UIEvents::EventNames::mousedown, DOM::IDLEventListener::create(realm(), mousedown_callback));
 }
 
-void HTMLInputElement::computed_css_values_changed()
+void HTMLInputElement::computed_properties_changed()
 {
-    auto appearance = computed_css_values()->appearance();
+    auto appearance = computed_properties()->appearance();
     if (!appearance.has_value() || *appearance == CSS::Appearance::None)
         return;
 
-    auto palette = document().page().palette();
-    auto accent_color = palette.color(ColorRole::Accent).to_string();
+    auto accent_color = MUST(String::from_utf8(CSS::string_from_keyword(CSS::Keyword::Accentcolor)));
 
-    auto const& accent_color_property = computed_css_values()->property(CSS::PropertyID::AccentColor);
+    auto const& accent_color_property = computed_properties()->property(CSS::PropertyID::AccentColor);
     if (accent_color_property.has_color())
-        accent_color = accent_color_property.to_string();
+        accent_color = accent_color_property.to_string(CSS::CSSStyleValue::SerializationMode::Normal);
 
     if (m_slider_progress_element)
         MUST(m_slider_progress_element->style_for_bindings()->set_property(CSS::PropertyID::BackgroundColor, accent_color));
@@ -1203,19 +1244,16 @@ void HTMLInputElement::did_lose_focus()
     commit_pending_changes();
 }
 
-void HTMLInputElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value)
+void HTMLInputElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value, Optional<FlyString> const&)
 {
     if (name == HTML::AttributeNames::checked) {
-        if (!value.has_value()) {
-            // When the checked content attribute is removed, if the control does not have dirty checkedness,
-            // the user agent must set the checkedness of the element to false.
-            if (!m_dirty_checkedness)
-                set_checked(false, ChangeSource::Programmatic);
-        } else {
-            // When the checked content attribute is added, if the control does not have dirty checkedness,
-            // the user agent must set the checkedness of the element to true
-            if (!m_dirty_checkedness)
-                set_checked(true, ChangeSource::Programmatic);
+        // https://html.spec.whatwg.org/multipage/input.html#the-input-element:concept-input-checked-dirty-2
+        // When the checked content attribute is added, if the control does not have dirty checkedness, the user agent must set the checkedness of the element to true;
+        // when the checked content attribute is removed, if the control does not have dirty checkedness, the user agent must set the checkedness of the element to false.
+        if (!m_dirty_checkedness) {
+            set_checked(value.has_value());
+            // set_checked() sets the dirty checkedness flag. We reset it here sinceit shouldn't be set when updating the attribute value
+            m_dirty_checkedness = false;
         }
     } else if (name == HTML::AttributeNames::type) {
         auto new_type_attribute_state = parse_type_attribute(value.value_or(String {}));
@@ -1327,7 +1365,7 @@ WebIDL::ExceptionOr<void> HTMLInputElement::handle_src_attribute(String const& v
 
     // 1. Let url be the result of encoding-parsing a URL given the src attribute's value, relative to the element's
     //    node document.
-    auto url = document().parse_url(value);
+    auto url = document().encoding_parse_url(value);
 
     // 2. If url is failure, then return.
     if (!url.is_valid())
@@ -1601,7 +1639,24 @@ void HTMLInputElement::form_associated_element_was_removed(DOM::Node*)
     set_shadow_root(nullptr);
 }
 
-void HTMLInputElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLInputElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    if (type_state() != TypeAttributeState::ImageButton)
+        return false;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::align,
+        HTML::AttributeNames::border,
+        HTML::AttributeNames::height,
+        HTML::AttributeNames::hspace,
+        HTML::AttributeNames::vspace,
+        HTML::AttributeNames::width);
+}
+
+void HTMLInputElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     if (type_state() != TypeAttributeState::ImageButton)
         return;
@@ -1609,56 +1664,62 @@ void HTMLInputElement::apply_presentational_hints(CSS::StyleProperties& style) c
     for_each_attribute([&](auto& name, auto& value) {
         if (name == HTML::AttributeNames::align) {
             if (value.equals_ignoring_ascii_case("center"sv))
-                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::Center));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::Center));
             else if (value.equals_ignoring_ascii_case("middle"sv))
-                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::Middle));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::Middle));
         } else if (name == HTML::AttributeNames::border) {
             if (auto parsed_value = parse_non_negative_integer(value); parsed_value.has_value()) {
                 auto width_style_value = CSS::LengthStyleValue::create(CSS::Length::make_px(*parsed_value));
-                style.set_property(CSS::PropertyID::BorderTopWidth, width_style_value);
-                style.set_property(CSS::PropertyID::BorderRightWidth, width_style_value);
-                style.set_property(CSS::PropertyID::BorderBottomWidth, width_style_value);
-                style.set_property(CSS::PropertyID::BorderLeftWidth, width_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopWidth, width_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightWidth, width_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomWidth, width_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftWidth, width_style_value);
 
                 auto border_style_value = CSS::CSSKeywordValue::create(CSS::Keyword::Solid);
-                style.set_property(CSS::PropertyID::BorderTopStyle, border_style_value);
-                style.set_property(CSS::PropertyID::BorderRightStyle, border_style_value);
-                style.set_property(CSS::PropertyID::BorderBottomStyle, border_style_value);
-                style.set_property(CSS::PropertyID::BorderLeftStyle, border_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopStyle, border_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightStyle, border_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomStyle, border_style_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftStyle, border_style_value);
             }
         } else if (name == HTML::AttributeNames::height) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::Height, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Height, *parsed_value);
             }
         }
         // https://html.spec.whatwg.org/multipage/rendering.html#attributes-for-embedded-content-and-images:maps-to-the-dimension-property
         else if (name == HTML::AttributeNames::hspace) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::MarginLeft, *parsed_value);
-                style.set_property(CSS::PropertyID::MarginRight, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, *parsed_value);
             }
         } else if (name == HTML::AttributeNames::vspace) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::MarginTop, *parsed_value);
-                style.set_property(CSS::PropertyID::MarginBottom, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginTop, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginBottom, *parsed_value);
             }
         } else if (name == HTML::AttributeNames::width) {
             if (auto parsed_value = parse_dimension_value(value)) {
-                style.set_property(CSS::PropertyID::Width, *parsed_value);
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Width, *parsed_value);
             }
         }
     });
 }
 
 // https://html.spec.whatwg.org/multipage/input.html#the-input-element%3Aconcept-node-clone-ext
-WebIDL::ExceptionOr<void> HTMLInputElement::cloned(DOM::Node& copy, bool)
+WebIDL::ExceptionOr<void> HTMLInputElement::cloned(DOM::Node& copy, bool subtree) const
 {
-    // The cloning steps for input elements must propagate the value, dirty value flag, checkedness, and dirty checkedness flag from the node being cloned to the copy.
+    TRY(Base::cloned(copy, subtree));
+
+    // The cloning steps for input elements given node, copy, and subtree are to propagate the value, dirty value flag, checkedness, and dirty checkedness flag from node to copy.
     auto& input_clone = verify_cast<HTMLInputElement>(copy);
     input_clone.m_value = m_value;
     input_clone.m_dirty_value = m_dirty_value;
     input_clone.m_checked = m_checked;
     input_clone.m_dirty_checkedness = m_dirty_checkedness;
+
+    // AD-HOC: The spec doesn't mention propagating this state, but there is a WPT test that expects cloned nodes to preserve it.
+    input_clone.m_indeterminate = m_indeterminate;
+
     return {};
 }
 
@@ -1691,7 +1752,7 @@ void HTMLInputElement::set_checked_within_group()
     if (checked())
         return;
 
-    set_checked(true, ChangeSource::User);
+    set_checked(true);
 
     // No point iterating the tree if we have an empty name.
     if (!name().has_value() || name()->is_empty())
@@ -1699,7 +1760,7 @@ void HTMLInputElement::set_checked_within_group()
 
     root().for_each_in_inclusive_subtree_of_type<HTML::HTMLInputElement>([&](auto& element) {
         if (element.checked() && &element != this && is_in_same_radio_button_group(*this, element))
-            element.set_checked(false, ChangeSource::User);
+            element.set_checked(false);
         return TraversalDecision::Continue;
     });
 }
@@ -1715,7 +1776,7 @@ void HTMLInputElement::legacy_pre_activation_behavior()
     // false, false if it is true) and set this element's indeterminate IDL
     // attribute to false.
     if (type_state() == TypeAttributeState::Checkbox) {
-        set_checked(!checked(), ChangeSource::User);
+        set_checked(!checked());
         set_indeterminate(false);
     }
 
@@ -1743,7 +1804,7 @@ void HTMLInputElement::legacy_cancelled_activation_behavior()
     // element's checkedness and the element's indeterminate IDL attribute back
     // to the values they had before the legacy-pre-activation behavior was run.
     if (type_state() == TypeAttributeState::Checkbox) {
-        set_checked(m_before_legacy_pre_activation_behavior_checked, ChangeSource::Programmatic);
+        set_checked(m_before_legacy_pre_activation_behavior_checked);
         set_indeterminate(m_before_legacy_pre_activation_behavior_indeterminate);
     }
 
@@ -1768,7 +1829,7 @@ void HTMLInputElement::legacy_cancelled_activation_behavior()
         }
 
         if (!did_reselect_previous_element)
-            set_checked(false, ChangeSource::User);
+            set_checked(false);
     }
 }
 
@@ -2351,12 +2412,19 @@ void HTMLInputElement::set_custom_validity(String const& error)
 
 Optional<ARIA::Role> HTMLInputElement::default_role() const
 {
+    // http://wpt.live/html-aam/roles-dynamic-switch.tentative.window.html "Disconnected <input type=checkbox switch>"
+    if (!is_connected())
+        return {};
     // https://www.w3.org/TR/html-aria/#el-input-button
     if (type_state() == TypeAttributeState::Button)
         return ARIA::Role::button;
     // https://www.w3.org/TR/html-aria/#el-input-checkbox
-    if (type_state() == TypeAttributeState::Checkbox)
+    if (type_state() == TypeAttributeState::Checkbox) {
+        // https://github.com/w3c/html-aam/issues/496
+        if (has_attribute(HTML::AttributeNames::switch_))
+            return ARIA::Role::switch_;
         return ARIA::Role::checkbox;
+    }
     // https://www.w3.org/TR/html-aria/#el-input-email
     if (type_state() == TypeAttributeState::Email && !has_attribute(AttributeNames::list))
         return ARIA::Role::textbox;

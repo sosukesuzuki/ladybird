@@ -17,7 +17,7 @@
 #include <LibWeb/CSS/StyleValues/BorderRadiusStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
-#include <LibWeb/CSS/StyleValues/CSSMathValue.h>
+#include <LibWeb/CSS/StyleValues/CalculatedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/EdgeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackPlacementStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackSizeListStyleValue.h>
@@ -80,20 +80,6 @@ String ResolvedCSSStyleDeclaration::item(size_t index) const
         return {};
     auto property_id = static_cast<PropertyID>(index + to_underlying(first_longhand_property_id));
     return string_from_property_id(property_id).to_string();
-}
-
-static NonnullRefPtr<CSSStyleValue const> style_value_for_background_property(Layout::NodeWithStyle const& layout_node, Function<NonnullRefPtr<CSSStyleValue const>(BackgroundLayerData const&)> callback, Function<NonnullRefPtr<CSSStyleValue const>()> default_value)
-{
-    auto const& background_layers = layout_node.background_layers();
-    if (background_layers.is_empty())
-        return default_value();
-    if (background_layers.size() == 1)
-        return callback(background_layers.first());
-    StyleValueVector values;
-    values.ensure_capacity(background_layers.size());
-    for (auto const& layer : background_layers)
-        values.unchecked_append(callback(layer));
-    return StyleValueList::create(move(values), StyleValueList::Separator::Comma);
 }
 
 static NonnullRefPtr<CSSStyleValue const> style_value_for_length_percentage(LengthPercentage const& length_percentage)
@@ -210,14 +196,14 @@ RefPtr<CSSStyleValue const> ResolvedCSSStyleDeclaration::style_value_for_propert
 
     auto get_computed_value = [this](PropertyID property_id) -> auto const& {
         if (m_pseudo_element.has_value())
-            return m_element->pseudo_element_computed_css_values(m_pseudo_element.value())->property(property_id);
-        return m_element->computed_css_values()->property(property_id);
+            return m_element->pseudo_element_computed_properties(m_pseudo_element.value())->property(property_id);
+        return m_element->computed_properties()->property(property_id);
     };
 
     // A limited number of properties have special rules for producing their "resolved value".
     // We also have to manually construct shorthands from their longhands here.
     // Everything else uses the computed value.
-    // https://www.w3.org/TR/cssom-1/#resolved-values
+    // https://drafts.csswg.org/cssom/#resolved-values
 
     // The resolved value for a given longhand property can be determined as follows:
     switch (property_id) {
@@ -453,19 +439,6 @@ RefPtr<CSSStyleValue const> ResolvedCSSStyleDeclaration::style_value_for_propert
         //    NOTE: This is handled inside the `default` case.
 
         // NOTE: Everything below is a shorthand that requires some manual construction.
-    case PropertyID::BackgroundPosition:
-        return style_value_for_background_property(
-            layout_node,
-            [](auto& layer) -> NonnullRefPtr<CSSStyleValue> {
-                return PositionStyleValue::create(
-                    EdgeStyleValue::create(layer.position_edge_x, layer.position_offset_x),
-                    EdgeStyleValue::create(layer.position_edge_y, layer.position_offset_y));
-            },
-            []() -> NonnullRefPtr<CSSStyleValue> {
-                return PositionStyleValue::create(
-                    EdgeStyleValue::create(PositionEdge::Left, Percentage(0)),
-                    EdgeStyleValue::create(PositionEdge::Top, Percentage(0)));
-            });
     case PropertyID::Border: {
         auto width = style_value_for_property(layout_node, PropertyID::BorderWidth);
         auto style = style_value_for_property(layout_node, PropertyID::BorderStyle);
@@ -581,7 +554,7 @@ Optional<StyleProperty> ResolvedCSSStyleDeclaration::property(PropertyID propert
         auto style = m_element->document().style_computer().compute_style(const_cast<DOM::Element&>(*m_element), m_pseudo_element);
 
         // FIXME: This is a stopgap until we implement shorthand -> longhand conversion.
-        auto const* value = style.maybe_null_property(property_id);
+        auto const* value = style->maybe_null_property(property_id);
         if (!value) {
             dbgln("FIXME: ResolvedCSSStyleDeclaration::property(property_id={:#x}) No value for property ID in newly computed style case.", to_underlying(property_id));
             return {};

@@ -23,8 +23,8 @@ class HTMLIFrameElement final
 public:
     virtual ~HTMLIFrameElement() override;
 
-    virtual GC::Ptr<Layout::Node> create_layout_node(CSS::StyleProperties) override;
-    virtual void adjust_computed_style(CSS::StyleProperties&) override;
+    virtual GC::Ptr<Layout::Node> create_layout_node(GC::Ref<CSS::ComputedProperties>) override;
+    virtual void adjust_computed_style(CSS::ComputedProperties&) override;
 
     void set_current_navigation_was_lazy_loaded(bool value);
 
@@ -40,8 +40,11 @@ private:
 
     virtual void initialize(JS::Realm&) override;
 
+    // ^DOM::Node
+    virtual bool is_html_iframe_element() const override { return true; }
+
     // ^DOM::Element
-    virtual void inserted() override;
+    virtual void post_connection() override;
     virtual void removed_from(Node*) override;
     virtual void attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
     virtual i32 default_tab_index_value() const override;

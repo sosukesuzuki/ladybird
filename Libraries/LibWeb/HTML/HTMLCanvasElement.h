@@ -38,6 +38,8 @@ public:
     WebIDL::ExceptionOr<void> set_width(WebIDL::UnsignedLong);
     WebIDL::ExceptionOr<void> set_height(WebIDL::UnsignedLong);
 
+    virtual void attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
+
     String to_data_url(StringView type, JS::Value quality);
     WebIDL::ExceptionOr<void> to_blob(GC::Ref<WebIDL::CallbackType> callback, StringView type, JS::Value quality);
 
@@ -52,10 +54,11 @@ private:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
 
-    virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
+    virtual bool is_presentational_hint(FlyString const&) const override;
+    virtual void apply_presentational_hints(GC::Ref<CSS::CascadedProperties>) const override;
 
-    virtual GC::Ptr<Layout::Node> create_layout_node(CSS::StyleProperties) override;
-    virtual void adjust_computed_style(CSS::StyleProperties&) override;
+    virtual GC::Ptr<Layout::Node> create_layout_node(GC::Ref<CSS::ComputedProperties>) override;
+    virtual void adjust_computed_style(CSS::ComputedProperties&) override;
 
     template<typename ContextType>
     JS::ThrowCompletionOr<HasOrCreatedContext> create_webgl_context(JS::Value options);

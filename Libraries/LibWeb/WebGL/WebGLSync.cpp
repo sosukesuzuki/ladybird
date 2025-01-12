@@ -13,13 +13,14 @@ namespace Web::WebGL {
 
 GC_DEFINE_ALLOCATOR(WebGLSync);
 
-GC::Ref<WebGLSync> WebGLSync::create(JS::Realm& realm, GLuint handle)
+GC::Ref<WebGLSync> WebGLSync::create(JS::Realm& realm, WebGLRenderingContextBase& context, GLsyncInternal handle)
 {
-    return realm.create<WebGLSync>(realm, handle);
+    return realm.create<WebGLSync>(realm, context, handle);
 }
 
-WebGLSync::WebGLSync(JS::Realm& realm, GLuint handle)
-    : WebGLObject(realm, handle)
+WebGLSync::WebGLSync(JS::Realm& realm, WebGLRenderingContextBase& context, GLsyncInternal handle)
+    : WebGLObject(realm, context, 0)
+    , m_sync_handle(handle)
 {
 }
 

@@ -30,6 +30,11 @@ public:
 
     RefPtr<Gfx::PaintingSurface> surface();
 
+    u32 default_framebuffer() const;
+    u32 default_renderbuffer() const;
+
+    Vector<String> get_supported_extensions();
+
 private:
     NonnullRefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     Gfx::IntSize m_size;

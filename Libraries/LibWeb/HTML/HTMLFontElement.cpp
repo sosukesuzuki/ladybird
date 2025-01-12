@@ -7,9 +7,9 @@
 #include <AK/GenericLexer.h>
 #include <LibWeb/Bindings/HTMLFontElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/Parser/ParsingContext.h>
-#include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/HTML/HTMLFontElement.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
@@ -26,7 +26,7 @@ enum class Mode {
 };
 
 // https://html.spec.whatwg.org/multipage/rendering.html#rules-for-parsing-a-legacy-font-size
-static Optional<CSS::Keyword> parse_legacy_font_size(StringView string)
+Optional<CSS::Keyword> HTMLFontElement::parse_legacy_font_size(StringView string)
 {
     // 1. Let input be the attribute's value.
     // 2. Let position be a pointer into input, initially pointing at the start of the string.
@@ -112,21 +112,32 @@ void HTMLFontElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLFontElement);
 }
 
-void HTMLFontElement::apply_presentational_hints(CSS::StyleProperties& style) const
+bool HTMLFontElement::is_presentational_hint(FlyString const& name) const
+{
+    if (Base::is_presentational_hint(name))
+        return true;
+
+    return first_is_one_of(name,
+        HTML::AttributeNames::color,
+        HTML::AttributeNames::face,
+        HTML::AttributeNames::size);
+}
+
+void HTMLFontElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
     for_each_attribute([&](auto& name, auto& value) {
         if (name.equals_ignoring_ascii_case("color"sv)) {
             // https://html.spec.whatwg.org/multipage/rendering.html#phrasing-content-3:rules-for-parsing-a-legacy-colour-value
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(color.value()));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(color.value()));
         } else if (name.equals_ignoring_ascii_case("size"sv)) {
             // When a font element has a size attribute, the user agent is expected to use the following steps, known as the rules for parsing a legacy font size, to treat the attribute as a presentational hint setting the element's 'font-size' property:
             auto font_size_or_empty = parse_legacy_font_size(value);
             if (font_size_or_empty.has_value()) {
                 auto font_size = string_from_keyword(font_size_or_empty.release_value());
                 if (auto parsed_value = parse_css_value(CSS::Parser::ParsingContext { document() }, font_size, CSS::PropertyID::FontSize))
-                    style.set_property(CSS::PropertyID::FontSize, parsed_value.release_nonnull());
+                    cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::FontSize, parsed_value.release_nonnull());
             }
         }
     });

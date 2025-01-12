@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <LibGfx/Filter.h>
 #include <LibWeb/CSS/Angle.h>
 #include <LibWeb/CSS/CalculatedOr.h>
 #include <LibWeb/CSS/Length.h>
@@ -44,15 +45,7 @@ struct HueRotate {
 };
 
 struct Color {
-    enum class Type {
-        Brightness,
-        Contrast,
-        Grayscale,
-        Invert,
-        Opacity,
-        Saturate,
-        Sepia
-    } operation;
+    Gfx::ColorFilter::Type operation;
     Optional<NumberPercentage> amount {};
     float resolved_amount() const;
     bool operator==(Color const&) const = default;
@@ -73,7 +66,7 @@ public:
 
     Vector<FilterFunction> const& filter_value_list() const { return m_filter_value_list; }
 
-    virtual String to_string() const override;
+    virtual String to_string(SerializationMode) const override;
 
     virtual ~FilterValueListStyleValue() override = default;
 
