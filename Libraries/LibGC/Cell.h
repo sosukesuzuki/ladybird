@@ -46,7 +46,8 @@ public:
 
     bool is_marked() const { return m_mark; }
     void set_marked(bool b) {
-        Trace::recordGCMarkEvent(reinterpret_cast<uintptr_t>(this));
+        // Trace::recordGCMarkEvent(reinterpret_cast<uintptr_t>(this));
+        Trace::recordGCMarkEventSync(reinterpret_cast<uintptr_t>(this));
         m_mark = b;
     }
 

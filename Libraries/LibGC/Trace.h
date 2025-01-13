@@ -56,6 +56,17 @@ public:
         trace_instance.enqueue_event(event);
     }
 
+    static void recordAllocationEventSync(uintptr_t absolute_address, size_t size) {
+        auto& trace_instance = instance();
+        uint32_t relative_address = trace_instance.to_relative_address(absolute_address);
+        TraceEvent event {
+            .type = TraceEventType::Allocate,
+            .relative_address = relative_address,
+            .size = static_cast<uint32_t>(size)
+        };
+        MUST(trace_instance.writeSync(event));
+    }
+
     static void recordGCMarkEvent(uintptr_t absolute_address) {
         auto& trace_instance = instance();
         uint32_t relative_address = trace_instance.to_relative_address(absolute_address);
@@ -65,6 +76,17 @@ public:
             .size = 0
         };
         trace_instance.enqueue_event(event);
+    }
+
+    static void recordGCMarkEventSync(uintptr_t absolute_address) {
+        auto& trace_instance = instance();
+        uint32_t relative_address = trace_instance.to_relative_address(absolute_address);
+        TraceEvent event {
+            .type = TraceEventType::GCMark,
+            .relative_address = relative_address,
+            .size = 0
+        };
+        MUST(trace_instance.writeSync(event));
     }
 private:
     Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker, NonnullOwnPtr<Core::File> file): m_worker(move(worker)), m_file(move(file)), m_base_address(reinterpret_cast<uintptr_t>(this))
@@ -120,6 +142,12 @@ private:
 
     ErrorOr<void> write(const Vector<TraceEvent, 1024>& buffer) {
         TRY(m_file->write_some(ReadonlyBytes { buffer.data(), buffer.size() * sizeof(TraceEvent) }));
+        return { };
+    }
+
+    ErrorOr<void> writeSync(const TraceEvent event) {
+        auto bytes = ReadonlyBytes { &event, sizeof(TraceEvent) };
+        TRY(m_file->write_some(bytes));
         return { };
     }
 
