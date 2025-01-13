@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic TODO List</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+        li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background: #f9f9f9;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .log {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Auto-Running TODO List</h1>
+    <ul id="todo-list"></ul>
+    <div class="log" id="log"></div>
+    <script>
+(function () {
+    const todoList = document.getElementById("todo-list");
+    const logElement = document.getElementById("log");
+    let taskIdCounter = 1;
+
+    function log(message) {
+        const timestamp = new Date().toISOString();
+        const logLine = document.createElement("div");
+        logLine.textContent = `[${timestamp}] ${message}`;
+        logElement.appendChild(logLine);
+        logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function addTask() {
+        const li = document.createElement("li");
+        li.textContent = `Task #${taskIdCounter}: This is a randomly generated task.`;
+        li.dataset.id = taskIdCounter++;
+
+        // Add a random tag for diversity
+        if (Math.random() > 0.7) {
+            const tag = document.createElement("span");
+            tag.textContent = `[Important]`;
+            tag.style.color = "red";
+            tag.style.marginLeft = "10px";
+            li.appendChild(tag);
+        }
+
+        todoList.appendChild(li);
+        log(`Added task #${li.dataset.id}`);
+    }
+
+    function removeTask() {
+        if (todoList.children.length > 0) {
+            const randomIndex = Math.floor(Math.random() * todoList.children.length);
+            const task = todoList.children[randomIndex];
+            log(`Removed task #${task.dataset.id}`);
+            todoList.removeChild(task);
+        } else {
+            log("No tasks to remove.");
+        }
+    }
+
+    function run() {
+        const actions = [
+            () => addTask(),
+            () => removeTask(),
+        ];
+
+        const randomAction = actions[Math.floor(Math.random() * actions.length)];
+        randomAction();
+
+        // ランダムな間隔で繰り返し
+        const interval = 0.05;
+        setTimeout(run, interval);
+    }
+
+    // 初期化
+    log("Starting the auto-running TODO list...");
+    setTimeout(run, 1000);
+})();
+    </script>
+</body>
+</html>
+
