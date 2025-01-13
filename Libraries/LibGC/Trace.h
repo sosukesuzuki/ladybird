@@ -66,11 +66,6 @@ public:
         };
         trace_instance.enqueue_event(event);
     }
-
-    static void log(TraceEvent event)
-    {
-        instance().enqueue_event(event);
-    }
 private:
     Trace(NonnullOwnPtr<Threading::WorkerThread<int>> worker, NonnullOwnPtr<Core::File> file): m_worker(move(worker)), m_file(move(file)), m_base_address(reinterpret_cast<uintptr_t>(this))
     {
@@ -116,10 +111,11 @@ private:
         }
     }
 
-    ErrorOr<void> write(const uintptr_t base_address) {
-        TraceBaseAddressEvent event(TraceEventType::BaseAddress, base_address);
-        TRY(m_file->write_some({ &event, sizeof(TraceBaseAddressEvent) }));
-        return { };
+   ErrorOr<void> write(const uintptr_t base_address) {
+        TraceBaseAddressEvent event { TraceEventType::BaseAddress, base_address };
+        auto bytes = ReadonlyBytes { &event, sizeof(TraceBaseAddressEvent) };
+        TRY(m_file->write_some(bytes));
+        return {};
     }
 
     ErrorOr<void> write(const Vector<TraceEvent, 1024>& buffer) {
