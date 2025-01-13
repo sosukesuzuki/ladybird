@@ -94,7 +94,6 @@ const generateHtmlAndCss = (events) => {
         <svg class="chart" viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg">
             ${generateYAxis(timeline)}
             ${generateSvgPath(timeline)}
-            ${generateGcBars(gcPhases, timeline.length)}
         </svg>
     </div>
 </body>
@@ -164,26 +163,27 @@ const parseBinaryFile = (filename) => {
     const buffer = fs.readFileSync(filename);
     const events = [];
 
-    const TRACE_EVENT_SIZE = 12;
 
     let offset = 0;
 
     const baseAddressType = buffer.readUInt8(offset);
     assert(baseAddressType === 0);
-    const baseAddress = buffer.readUInt32LE(offset + 8)
+    const baseAddress = buffer.readUint32LE(offset + 8)
     events.push({
         type: "BaseAddress",
         address: baseAddress,
     });
     offset += 16
 
+    const TRACE_EVENT_SIZE = 12;
     for (; offset + TRACE_EVENT_SIZE <= buffer.length; offset += TRACE_EVENT_SIZE) {
         const type = buffer.readUInt8(offset);
         const address = buffer.readUInt32LE(offset + 4);
         const size = buffer.readUInt32LE(offset + 8);
 
+        const typeValue = type === 0 ? "BaseAddress" : type === 1 ? "Allocate" : "GCMark";
         events.push({
-            type: type === 0 ? "BaseAddress" : type === 1 ? "Allocate" : "GCMark",
+            type: typeValue,
             address,
             size,
         });
@@ -193,10 +193,10 @@ const parseBinaryFile = (filename) => {
 };
 
 
-const filename = "gc_events.bin";
+const filename = "gc_events_2.bin";
 const events = parseBinaryFile(filename);
 const htmlContent = generateHtmlAndCss(events);
 console.log("BASE: ", base);
 console.log("ALLOCATE: ", allocate);
 console.log("MARK: ", mark);
-fs.writeFileSync("output.html", htmlContent);
+fs.writeFileSync("output_2.html", htmlContent);
