@@ -42,8 +42,8 @@ public:
     Ref<T> allocate(Args&&... args)
     {
         auto* memory = allocate_cell<T>();
-        // GC::Trace::recordAllocationEvent(reinterpret_cast<uintptr_t>(memory), sizeof(T));
-        GC::Trace::recordAllocationEventSync(reinterpret_cast<uintptr_t>(memory), sizeof(T));
+        GC::Trace::recordAllocationEvent(reinterpret_cast<uintptr_t>(memory), sizeof(T));
+        // GC::Trace::recordAllocationEventSync(reinterpret_cast<uintptr_t>(memory), sizeof(T));
         defer_gc();
         new (memory) T(forward<Args>(args)...);
         undefer_gc();

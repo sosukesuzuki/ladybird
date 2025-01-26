@@ -15,6 +15,9 @@
 
 namespace GC {
 
+constexpr unsigned n = 1024;
+constexpr unsigned m = 1024;
+
 enum class TraceEventType: uint8_t {
     BaseAddress,
     Allocate,
@@ -32,7 +35,7 @@ struct TraceEvent {
     uint32_t size;
 };
 
-using TraceEventSharedQueue = Core::SharedSingleProducerCircularQueue<TraceEvent, 1024>;
+using TraceEventSharedQueue = Core::SharedSingleProducerCircularQueue<TraceEvent, n>;
 
 class Trace {
 public:
@@ -93,8 +96,8 @@ private:
     {
         m_queue = MUST(TraceEventSharedQueue::create());
         m_worker->start_task([&]() -> ErrorOr<void, int> {
-            Vector<TraceEvent, 1024> buffer;
-            buffer.ensure_capacity(1024);
+            Vector<TraceEvent, m> buffer;
+            buffer.ensure_capacity(m);
             while (true) {
                 auto result = m_queue.dequeue();
                 if (result.is_error()) {
